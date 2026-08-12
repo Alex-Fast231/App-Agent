@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FaSt-Doku Viewer</title>
+<style>
+  :root{
+    --bg:#f1f5f9; --card:#ffffff; --text:#0f172a; --muted:#64748b;
+    --header:#1e293b; --primary:#2563eb; --danger:#b91c1c; --border:#dbe3ee;
+  }
+  *{ box-sizing:border-box; }
+  body{ margin:0; font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); }
+  header{ background:var(--header); color:#fff; padding:16px 18px; }
+  header h1{ margin:0; font-size:20px; }
+  header p{ margin:4px 0 0; font-size:13px; opacity:0.75; }
+  main{ max-width:960px; margin:0 auto; padding:20px 16px 60px; }
+  .card{ background:var(--card); border:1px solid var(--border); border-radius:14px; padding:20px; margin-bottom:16px; box-shadow:0 6px 20px rgba(15,23,42,0.06); }
+  label{ display:block; margin-top:12px; margin-bottom:6px; font-weight:600; font-size:14px; }
+  input, select{ width:100%; padding:10px 12px; border-radius:10px; border:1px solid var(--border); font-size:15px; box-sizing:border-box; }
+  button{ padding:10px 14px; border:none; border-radius:10px; background:var(--primary); color:#fff; font-weight:600; cursor:pointer; font-size:14px; }
+  button.secondary{ background:#475569; }
+  button.danger{ background:var(--danger); }
+  .row{ display:flex; gap:10px; flex-wrap:wrap; margin-top:10px; }
+  .muted{ color:var(--muted); font-size:13px; }
+  .error{ color:var(--danger); font-weight:600; margin-top:10px; }
+  .pill{ display:inline-block; font-size:11px; background:#e2e8f0; color:#334155; padding:3px 8px; border-radius:999px; margin-right:6px; }
+  .pill-red{ display:inline-block; font-size:11px; background:#fee2e2; color:#b91c1c; padding:3px 8px; border-radius:999px; margin-right:6px; }
+  details.accordion{ border:1px solid var(--border); border-radius:12px; background:#fff; margin-bottom:10px; overflow:hidden; }
+  details.accordion > summary{ list-style:none; cursor:pointer; padding:12px 14px; font-weight:600; background:#e2e6ec; display:flex; justify-content:space-between; gap:10px; }
+  details.accordion > summary::-webkit-details-marker{ display:none; }
+  .accordion-body{ padding:14px; border-top:1px solid var(--border); }
+  .tab-row{ display:flex; gap:8px; margin-bottom:12px; }
+  .tab-row button{ flex:1; background:#e2e8f0; color:#334155; }
+  .tab-row button.active{ background:var(--primary); color:#fff; }
+  .list-item{ padding:10px 12px; border:1px solid var(--border); border-radius:10px; margin-bottom:8px; cursor:pointer; background:#fff; }
+  .list-item:hover{ background:#f8fafc; }
+  .list-item.inactive{ opacity:0.55; }
+  table{ width:100%; border-collapse:collapse; font-size:13px; margin-top:8px; }
+  th, td{ border:1px solid var(--border); padding:6px 8px; text-align:left; }
+  th{ background:#f3f4f6; }
+  .detail-section{ margin-top:14px; }
+  .detail-section h4{ margin-bottom:6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>FaSt-Doku Viewer</h1>
+  <p>Läuft lokal, ohne Internetverbindung. Lädt verschlüsselte Export-Dateien aus der FaSt-Doku App ein.</p>
+</header>
+<main id="app"></main>
+
+<script src="./zip-full.min.js"></script>
+<script type="module">
+// ============================================================
+// Krypto (identische Logik wie crypto/crypto-engine.js +
+// crypto/key-management.js in der Haupt-App, hier bewusst
+// eigenständig kopiert, damit der Viewer ohne den Rest des
+// Repos funktioniert).
+// ============================================================
+function base64ToUint8(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+function textToUint8(text) { return new TextEncoder().encode(text); }
+function uint8ToText(bytes) { return new TextDecoder().decode(bytes); }
+
+async function deriveKeyFromPassword(password, saltBytes) {
+  const keyMaterial = await crypto.subtle.importKey("raw", textToUint8(password), "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt: saltBytes, iterations: 250000, hash: "SHA-256" },
+    keyMaterial,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"]
+  );
+}
+
+async function decryptJSON(payload, cryptoKey) {
+  const iv = base64ToUint8(payload.ivBase64);
+  const cipherBytes = base64ToUint8(payload.cipherBase64);
+  const plainBuffer = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, cryptoKey, cipherBytes);
+  return JSON.parse(uint8ToText(new Uint8Array(plainBuffer)));
+}
+
+async function importKeyRaw(rawKeyBytes) {
+  return crypto.subtle.importKey("raw", rawKeyBytes, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+}
+
+async function unwrapDataKeyWithPassword(wrappedPayload, password, passwordSaltBytes) {
+  const passwordKey = await deriveKeyFromPassword(password, passwordSaltBytes);
+  const result = await decryptJSON(
+    { ivBase64: wrappedPayload.ivBase64, cipherBase64: wrappedPayload.wrappedKeyBase64 },
+    passwordKey
+  );
+  return importKeyRaw(base64ToUint8(result.rawKeyBase64));
+}
+
+async function readExportFile(file, password) {
+  const zipLib = window.zip;
+  if (!zipLib) throw new Error("ZIP-Bibliothek nicht geladen.");
+
+  const reader = new zipLib.ZipReader(new zipLib.BlobReader(file));
+  try {
+    const entries = await reader.getEntries();
+    const entryMap = new Map(entries.map((e) => [e.filename, e]));
+
+    const appEntry = entryMap.get("appData.enc");
+    const cryptoEntry = entryMap.get("cryptoMeta.json");
+    const metaEntry = entryMap.get("meta.json");
+
+    if (!appEntry || !cryptoEntry || !metaEntry) {
+      throw new Error("Datei ist keine gültige FaSt-Doku Exportdatei.");
+    }
+
+    let encryptedAppData, cryptoMeta, meta;
+    try {
+      encryptedAppData = JSON.parse(await appEntry.getData(new zipLib.TextWriter(), { password }));
+      cryptoMeta = JSON.parse(await cryptoEntry.getData(new zipLib.TextWriter(), { password }));
+      meta = JSON.parse(await metaEntry.getData(new zipLib.TextWriter(), { password }));
+    } catch {
+      throw new Error("Falsches Passwort oder beschädigte Datei.");
+    }
+
+    const dataKey = await unwrapDataKeyWithPassword(
+      cryptoMeta.wrappedDataKeyByPassword,
+      password,
+      base64ToUint8(cryptoMeta.passwordSaltBase64)
+    );
+    const appData = await decryptJSON(encryptedAppData, dataKey);
+    return { appData, meta };
+  } finally {
+    await reader.close();
+  }
+}
+
+// ============================================================
+// Datumshilfen (Kopie der Kernlogik aus core/date-utils.js /
+// modules/fristen.js der Haupt-App)
+// ============================================================
+function parseComparableDate(value) {
+  const s = String(value || "").trim();
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const year = +m[1], month = +m[2], day = +m[3];
+  const d = new Date(year, month - 1, day, 12, 0, 0, 0);
+  if (d.getFullYear() != year || d.getMonth() + 1 != month || d.getDate() != day) return null;
+  return d;
+}
+function getComparableFromDate(date) {
+  if (!(date instanceof Date) || isNaN(date.getTime())) return null;
+  const yyyy = String(date.getFullYear());
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+function parseDeDate(value) {
+  const s = String(value || "").trim();
+  const m = s.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  if (!m) return null;
+  const comparable = `${m[3]}-${m[2]}-${m[1]}`;
+  return parseComparableDate(comparable) ? comparable : null;
+}
+function formatDeDate(value) {
+  const comparable = parseComparableDate(value) ? value : parseDeDate(value);
+  const d = parseComparableDate(comparable);
+  if (!d) return "";
+  return `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}.${d.getFullYear()}`;
+}
+function addDays(date, days) {
+  const d = new Date(date.getTime());
+  d.setDate(d.getDate() + days);
+  return d;
+}
+function totalAnwendungsmenge(items) {
+  let sum = 0;
+  (items || []).forEach((item) => {
+    if (!item || item.type === "Blanko") return;
+    const n = Number(item.count);
+    if (Number.isFinite(n)) sum += n;
+  });
+  return sum;
+}
+function getRezeptFristSummary(rezept) {
+  const comparable = parseDeDate(rezept?.ausstell || "");
+  const ausstellDate = comparable ? parseComparableDate(comparable) : null;
+  if (!ausstellDate) return "Ausstellungsdatum fehlt";
+  const days = (rezept?.bg || rezept?.dringend) ? 14 : 28;
+  const latestStart = addDays(ausstellDate, days);
+  return `Beginn bis ${formatDeDate(getComparableFromDate(latestStart))} (${totalAnwendungsmenge(rezept?.items)}x)`;
+}
+
+// ============================================================
+// Lokaler Speicher (Abgleich-Logik: neuere Exporte überschreiben
+// ältere Einträge, keine Duplikate, gelöschte Patienten werden
+// als inaktiv markiert statt gelöscht)
+// ============================================================
+const STORE_KEY = "fastdoku_viewer_store_v1";
+
+function loadStore() {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    return raw ? JSON.parse(raw) : { therapists: {} };
+  } catch {
+    return { therapists: {} };
+  }
+}
+function saveStore(store) {
+  localStorage.setItem(STORE_KEY, JSON.stringify(store));
+}
+
+function mergeAppDataIntoStore(store, appData) {
+  const therapistId = appData.settings?.therapistId || "unbekannt";
+  const therapistName = appData.settings?.therapistName || "Unbekannter Therapeut";
+  const existing = store.therapists[therapistId] || { therapistId, therapistName, homes: [], aerzte: [], nachbestellHistory: [] };
+
+  const existingHomesById = new Map((existing.homes || []).map((h) => [h.homeId, h]));
+  const newHomeIds = new Set((appData.homes || []).map((h) => h.homeId));
+
+  const mergedHomes = (appData.homes || []).map((home) => {
+    const prevHome = existingHomesById.get(home.homeId);
+    const newPatientIds = new Set((home.patients || []).map((p) => p.patientId));
+    const mergedPatients = (home.patients || []).map((p) => ({ ...p, inactive: false }));
+
+    (prevHome?.patients || []).forEach((p) => {
+      if (!newPatientIds.has(p.patientId)) {
+        mergedPatients.push({ ...p, inactive: true });
+      }
+    });
+
+    return { ...home, patients: mergedPatients };
+  });
+
+  // Einrichtungen, die im neuen Export komplett fehlen, bleiben als bisher
+  // bekannter Stand erhalten (nicht gelöscht).
+  (existing.homes || []).forEach((h) => {
+    if (!newHomeIds.has(h.homeId)) mergedHomes.push(h);
+  });
+
+  store.therapists[therapistId] = {
+    therapistId,
+    therapistName,
+    homes: mergedHomes,
+    aerzte: appData.aerzte && appData.aerzte.length ? appData.aerzte : (existing.aerzte || []),
+    nachbestellHistory: appData.nachbestellHistory && appData.nachbestellHistory.length ? appData.nachbestellHistory : (existing.nachbestellHistory || []),
+    kilometer: appData.kilometer && appData.kilometer.travelLog ? appData.kilometer : (existing.kilometer || { travelLog: [] }),
+    abgabeHistory: appData.abgabeHistory && appData.abgabeHistory.length ? appData.abgabeHistory : (existing.abgabeHistory || []),
+    lastImportAt: new Date().toISOString()
+  };
+
+  return store;
+}
+
+// ============================================================
+// UI
+// ============================================================
+const app = document.getElementById("app");
+let store = loadStore();
+let uiState = { expandedTherapist: null, activeTab: {}, searchText: {}, selectedPatient: {}, selectedArzt: {} };
+
+function esc(value) {
+  return String(value == null ? "" : value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function getAllPatientsForTherapist(therapist) {
+  const rows = [];
+  (therapist.homes || []).forEach((home) => {
+    (home.patients || []).forEach((patient) => {
+      rows.push({ home, patient });
+    });
+  });
+  rows.sort((a, b) => {
+    const an = `${a.patient.lastName || ""} ${a.patient.firstName || ""}`.trim();
+    const bn = `${b.patient.lastName || ""} ${b.patient.firstName || ""}`.trim();
+    return an.localeCompare(bn, "de");
+  });
+  return rows;
+}
+
+function getAllDoctorsForTherapist(therapist) {
+  const namesFromRezepte = new Set();
+  (therapist.homes || []).forEach((home) => {
+    (home.patients || []).forEach((patient) => {
+      (patient.rezepte || []).forEach((rezept) => {
+        const name = String(rezept.arzt || "").trim();
+        if (name) namesFromRezepte.add(name);
+      });
+    });
+  });
+  (therapist.aerzte || []).forEach((arzt) => {
+    const name = String(arzt.name || "").trim();
+    if (name) namesFromRezepte.add(name);
+  });
+
+  const addressByName = new Map((therapist.aerzte || []).map((a) => [a.name, a.adresse || ""]));
+  return Array.from(namesFromRezepte)
+    .map((name) => ({ name, adresse: addressByName.get(name) || "" }))
+    .sort((a, b) => a.name.localeCompare(b.name, "de"));
+}
+
+function getPatientsForDoctor(therapist, doctorName) {
+  const rows = [];
+  (therapist.homes || []).forEach((home) => {
+    (home.patients || []).forEach((patient) => {
+      const hasThisDoctor = (patient.rezepte || []).some((r) => String(r.arzt || "").trim() === doctorName);
+      if (hasThisDoctor) rows.push({ home, patient });
+    });
+  });
+  return rows.sort((a, b) => `${a.patient.lastName} ${a.patient.firstName}`.localeCompare(`${b.patient.lastName} ${b.patient.firstName}`, "de"));
+}
+
+function getKilometerForPatient(therapist, patientId) {
+  const travelLog = therapist.kilometer?.travelLog || [];
+  return travelLog.filter((item) => {
+    const from = String(item.fromPointId || "");
+    const to = String(item.toPointId || "");
+    return from === `hb:${patientId}` || to === `hb:${patientId}`;
+  });
+}
+
+function renderZuzahlungLabel(status) {
+  if (status === "ja") return "Ja";
+  if (status === "nein") return "Nein";
+  if (status === "ungeklaert") return "Noch nicht geklärt";
+  return "—";
+}
+
+function renderPatientDetail(therapist, home, patient) {
+  const rezepte = [...(patient.rezepte || [])].sort((a, b) => String(b.ausstell || "").localeCompare(String(a.ausstell || "")));
+  const kilometerRows = getKilometerForPatient(therapist, patient.patientId);
+  const patientName = `${patient.lastName || ""}, ${patient.firstName || ""}`.replace(/^,\s*/, "").trim();
+
+  return `
+    <div class="card">
+      <h3>${esc(patientName)} ${patient.inactive ? '<span class="pill-red">Inaktiv (gelöscht)</span>' : ""}</h3>
+      <p class="muted">Heim: ${esc(home.name || "—")} · Geburtsdatum: ${esc(patient.birthDate || "—")}</p>
+
+      <div class="detail-section">
+        <h4>Rezepte</h4>
+        ${rezepte.length === 0 ? '<p class="muted">Keine Rezepte.</p>' : `
+          <table>
+            <tr><th>Heilmittel</th><th>Anzahl</th><th>Ausstellung</th><th>Frist</th></tr>
+            ${rezepte.map((r) => `
+              <tr>
+                <td>${esc((r.items || []).map((i) => i.type).join(", ") || "—")}</td>
+                <td>${esc((r.items || []).map((i) => i.count).filter(Boolean).join(", ") || "—")}</td>
+                <td>${esc(r.ausstell || "—")}</td>
+                <td>${esc(getRezeptFristSummary(r))}</td>
+              </tr>
+            `).join("")}
+          </table>
+        `}
+      </div>
+
+      <div class="detail-section">
+        <h4>Zuzahlungsstatus</h4>
+        <p>${esc(renderZuzahlungLabel(patient.zuzahlungsstatus))}</p>
+      </div>
+
+      <div class="detail-section">
+        <h4>Assessments</h4>
+        ${(patient.assessments || []).length === 0 ? '<p class="muted">Keine Assessments.</p>' : `
+          <table>
+            <tr><th>Datum</th><th>Ergebnis</th></tr>
+            ${patient.assessments.map((a) => `<tr><td>${esc(formatDeDate(a.date))}</td><td>${esc(a.content || "—")}</td></tr>`).join("")}
+          </table>
+        `}
+      </div>
+
+      <div class="detail-section">
+        <h4>Therapieberichte</h4>
+        ${rezepte.every((r) => !(r.doctorReports || []).length) ? '<p class="muted">Keine Therapieberichte.</p>' : `
+          <table>
+            <tr><th>Datum</th><th>Inhalt</th></tr>
+            ${rezepte.flatMap((r) => (r.doctorReports || []).map((rep) => `<tr><td>${esc(formatDeDate(rep.createdAt?.slice(0, 10)))}</td><td>${esc(rep.content || "—")}</td></tr>`)).join("")}
+          </table>
+        `}
+      </div>
+
+      <div class="detail-section">
+        <h4>Doku</h4>
+        ${(() => {
+          const allEntries = [...(patient.entries || []), ...rezepte.flatMap((r) => r.entries || [])];
+          return allEntries.length === 0 ? '<p class="muted">Keine Dokumentationseinträge.</p>' : `
+            <table>
+              <tr><th>Datum</th><th>Text</th></tr>
+              ${allEntries.map((e) => `<tr><td>${esc(e.date || "—")}</td><td>${esc(e.text || "—")}</td></tr>`).join("")}
+            </table>
+          `;
+        })()}
+      </div>
+
+      <div class="detail-section">
+        <h4>Kilometer</h4>
+        ${kilometerRows.length === 0 ? '<p class="muted">Keine Kilometer-Einträge.</p>' : `
+          <table>
+            <tr><th>Datum</th><th>Von</th><th>Nach</th><th>Km</th></tr>
+            ${kilometerRows.map((k) => `<tr><td>${esc(k.date || "—")}</td><td>${esc(k.fromLabel || "—")}</td><td>${esc(k.toLabel || "—")}</td><td>${esc(k.km ?? "—")}</td></tr>`).join("")}
+          </table>
+        `}
+      </div>
+
+      <div class="detail-section">
+        <h4>Abgabeliste</h4>
+        ${(() => {
+          const rows = (therapist.abgabeHistory || []).flatMap((h) => (h.rows || [])).filter((row) =>
+            `${row.patientLastName || ""}${row.patientFirstName || ""}`.trim() &&
+            (row.patientLastName === patient.lastName && row.patientFirstName === patient.firstName)
+          );
+          return rows.length === 0 ? '<p class="muted">Keine Einträge in gespeicherten Abgabelisten.</p>' : `
+            <table>
+              <tr><th>Leistung</th><th>Ausstellung</th></tr>
+              ${rows.map((row) => `<tr><td>${esc(row.leistung || "—")}</td><td>${esc(row.ausstell || "—")}</td></tr>`).join("")}
+            </table>
+          `;
+        })()}
+      </div>
+    </div>
+  `;
+}
+
+function renderDoctorDetail(therapist, doctorName) {
+  const patients = getPatientsForDoctor(therapist, doctorName);
+  const arztInfo = (therapist.aerzte || []).find((a) => a.name === doctorName);
+  return `
+    <div class="card">
+      <h3>${esc(doctorName)}</h3>
+      ${arztInfo?.adresse ? `<p class="muted">${esc(arztInfo.adresse)}</p>` : ""}
+      <h4 style="margin-top:14px;">Zugeordnete Patienten</h4>
+      ${patients.length === 0 ? '<p class="muted">Keine zugeordneten Patienten.</p>' : `
+        <table>
+          <tr><th>Patient</th><th>Heim</th></tr>
+          ${patients.map((row) => `<tr><td>${esc(`${row.patient.lastName}, ${row.patient.firstName}`)}</td><td>${esc(row.home.name || "—")}</td></tr>`).join("")}
+        </table>
+      `}
+    </div>
+  `;
+}
+
+function renderTherapistBody(therapist) {
+  const tab = uiState.activeTab[therapist.therapistId] || "patienten";
+  const search = (uiState.searchText[therapist.therapistId] || "").trim().toLowerCase();
+
+  let listHtml = "";
+  let detailHtml = "";
+
+  if (tab === "patienten") {
+    let rows = getAllPatientsForTherapist(therapist);
+    if (search) {
+      rows = rows.filter((row) => {
+        const haystack = `${row.patient.firstName} ${row.patient.lastName} ${row.patient.birthDate} ${row.home.name}`.toLowerCase();
+        return haystack.includes(search);
+      });
+    }
+    listHtml = rows.length === 0 ? '<p class="muted">Keine Patienten gefunden.</p>' : rows.map((row) => `
+      <div class="list-item ${row.patient.inactive ? "inactive" : ""}" data-patient-id="${esc(row.patient.patientId)}" data-home-id="${esc(row.home.homeId)}">
+        <strong>${esc(`${row.patient.lastName}, ${row.patient.firstName}`)}</strong>
+        <div class="muted">${esc(row.home.name || "—")}${row.patient.inactive ? " · inaktiv" : ""}</div>
+      </div>
+    `).join("");
+
+    const selectedPatientId = uiState.selectedPatient[therapist.therapistId];
+    if (selectedPatientId) {
+      const found = rows.find((r) => r.patient.patientId === selectedPatientId) || getAllPatientsForTherapist(therapist).find((r) => r.patient.patientId === selectedPatientId);
+      if (found) detailHtml = renderPatientDetail(therapist, found.home, found.patient);
+    }
+  } else {
+    let doctors = getAllDoctorsForTherapist(therapist);
+    if (search) doctors = doctors.filter((d) => d.name.toLowerCase().includes(search));
+
+    listHtml = doctors.length === 0 ? '<p class="muted">Keine Ärzte gefunden.</p>' : doctors.map((d) => `
+      <div class="list-item" data-arzt-name="${esc(d.name)}">
+        <strong>${esc(d.name)}</strong>
+      </div>
+    `).join("");
+
+    const selectedArzt = uiState.selectedArzt[therapist.therapistId];
+    if (selectedArzt) detailHtml = renderDoctorDetail(therapist, selectedArzt);
+  }
+
+  return `
+    <div class="tab-row">
+      <button class="tabBtn ${tab === "patienten" ? "active" : ""}" data-tab="patienten" data-therapist-id="${esc(therapist.therapistId)}">Patienten</button>
+      <button class="tabBtn ${tab === "aerzte" ? "active" : ""}" data-tab="aerzte" data-therapist-id="${esc(therapist.therapistId)}">Ärzte</button>
+    </div>
+    <input type="text" class="searchInput" data-therapist-id="${esc(therapist.therapistId)}" placeholder="Suche..." value="${esc(uiState.searchText[therapist.therapistId] || "")}">
+    <div style="margin-top:12px;">${listHtml}</div>
+    ${detailHtml}
+  `;
+}
+
+function render() {
+  const therapists = Object.values(store.therapists || {}).sort((a, b) => a.therapistName.localeCompare(b.therapistName, "de"));
+
+  app.innerHTML = `
+    <div class="card">
+      <h2>Export-Datei laden</h2>
+      <label for="fileInput">Export-ZIP (.zip)</label>
+      <input id="fileInput" type="file" accept=".zip">
+      <label for="passwordInput">Praxispasswort</label>
+      <input id="passwordInput" type="password">
+      <div class="row">
+        <button id="loadBtn">Datei laden</button>
+      </div>
+      <div id="loadMsg"></div>
+    </div>
+
+    ${therapists.length === 0 ? `
+      <div class="card"><p class="muted">Noch keine Daten geladen. Bitte eine Export-Datei auswählen.</p></div>
+    ` : therapists.map((therapist) => `
+      <details class="accordion" ${uiState.expandedTherapist === therapist.therapistId ? "open" : ""} data-therapist-toggle="${esc(therapist.therapistId)}">
+        <summary>
+          <span>${esc(therapist.therapistName)}</span>
+          <span class="muted">${(therapist.homes || []).reduce((sum, h) => sum + (h.patients || []).length, 0)} Patient(en) · zuletzt geladen: ${esc(formatDeDate(therapist.lastImportAt?.slice(0, 10)) || "—")}</span>
+        </summary>
+        <div class="accordion-body" id="therapist-body-${esc(therapist.therapistId)}">
+          ${uiState.expandedTherapist === therapist.therapistId ? renderTherapistBody(therapist) : ""}
+        </div>
+      </details>
+    `).join("")}
+  `;
+
+  bindEvents(therapists);
+}
+
+function bindEvents(therapists) {
+  document.getElementById("loadBtn").onclick = async () => {
+    const fileInput = document.getElementById("fileInput");
+    const passwordInput = document.getElementById("passwordInput");
+    const msg = document.getElementById("loadMsg");
+    msg.className = "error";
+    msg.textContent = "";
+
+    const file = fileInput.files?.[0];
+    const password = passwordInput.value;
+
+    if (!file) {
+      msg.textContent = "Bitte eine Datei auswählen.";
+      return;
+    }
+    if (!password) {
+      msg.textContent = "Bitte das Praxispasswort eingeben.";
+      return;
+    }
+
+    try {
+      const { appData } = await readExportFile(file, password);
+      store = mergeAppDataIntoStore(store, appData);
+      saveStore(store);
+      uiState.expandedTherapist = appData.settings?.therapistId || null;
+      msg.className = "muted";
+      msg.textContent = "Datei erfolgreich geladen und abgeglichen.";
+      render();
+    } catch (err) {
+      console.error(err);
+      msg.textContent = err?.message || "Datei konnte nicht geladen werden.";
+    }
+  };
+
+  document.querySelectorAll("[data-therapist-toggle]").forEach((el) => {
+    el.addEventListener("toggle", () => {
+      if (el.open) {
+        uiState.expandedTherapist = el.dataset.therapistToggle;
+        const body = document.getElementById(`therapist-body-${el.dataset.therapistToggle}`);
+        const therapist = therapists.find((t) => t.therapistId === el.dataset.therapistToggle);
+        if (body && therapist) {
+          body.innerHTML = renderTherapistBody(therapist);
+          bindBodyEvents(therapist);
+        }
+      } else if (uiState.expandedTherapist === el.dataset.therapistToggle) {
+        uiState.expandedTherapist = null;
+      }
+    });
+  });
+
+  if (uiState.expandedTherapist) {
+    const therapist = therapists.find((t) => t.therapistId === uiState.expandedTherapist);
+    if (therapist) bindBodyEvents(therapist);
+  }
+}
+
+function bindBodyEvents(therapist) {
+  const body = document.getElementById(`therapist-body-${therapist.therapistId}`);
+  if (!body) return;
+
+  body.querySelectorAll(".tabBtn").forEach((btn) => {
+    btn.onclick = () => {
+      uiState.activeTab[therapist.therapistId] = btn.dataset.tab;
+      body.innerHTML = renderTherapistBody(therapist);
+      bindBodyEvents(therapist);
+    };
+  });
+
+  const searchInput = body.querySelector(".searchInput");
+  if (searchInput) {
+    searchInput.oninput = () => {
+      uiState.searchText[therapist.therapistId] = searchInput.value;
+      const focusPos = searchInput.selectionStart;
+      body.innerHTML = renderTherapistBody(therapist);
+      bindBodyEvents(therapist);
+      const newInput = body.querySelector(".searchInput");
+      if (newInput) {
+        newInput.focus();
+        newInput.setSelectionRange(focusPos, focusPos);
+      }
+    };
+  }
+
+  body.querySelectorAll("[data-patient-id]").forEach((el) => {
+    el.onclick = () => {
+      uiState.selectedPatient[therapist.therapistId] = el.dataset.patientId;
+      body.innerHTML = renderTherapistBody(therapist);
+      bindBodyEvents(therapist);
+    };
+  });
+
+  body.querySelectorAll("[data-arzt-name]").forEach((el) => {
+    el.onclick = () => {
+      uiState.selectedArzt[therapist.therapistId] = el.dataset.arztName;
+      body.innerHTML = renderTherapistBody(therapist);
+      bindBodyEvents(therapist);
+    };
+  });
+}
+
+render();
+</script>
+</body>
+</html>
