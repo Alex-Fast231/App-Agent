@@ -353,12 +353,14 @@ export const THERAPIEZIEL_OPTIONEN = [
 export const COMPLIANCE_OPTIONEN = [
   { val: "gut", label: "Gut" },
   { val: "eingeschraenkt", label: "Eingeschränkt" },
-  { val: "nicht_vorhanden", label: "Nicht vorhanden" }
+  { val: "nicht_vorhanden", label: "Nicht vorhanden" },
+  { val: "keine_angabe", label: "Keine Angabe" }
 ];
 
 export const VERLAUF_OPTIONEN = [
   { val: "verbessert", label: "Verbessert" },
   { val: "stabil", label: "Stabil" },
+  { val: "status_quo", label: "Status quo" },
   { val: "verschlechtert", label: "Verschlechtert" }
 ];
 

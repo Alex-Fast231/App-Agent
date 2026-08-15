@@ -229,9 +229,10 @@
   padding:14px 16px;
   font-weight:600;
   display:flex;
+  flex-wrap:wrap;
   justify-content:space-between;
   align-items:center;
-  gap:10px;
+  gap:4px 10px;
   background:#E2E6EC;
   color:#2A2F36;
   font-weight:600;
@@ -244,8 +245,8 @@
 }
 
 .accordion summary > span:last-child{
-  flex:0 0 auto;
-  white-space:nowrap;
+  flex:0 1 auto;
+  min-width:0;
 }
 
 .accordion summary:hover{
@@ -295,6 +296,15 @@
       align-items:center;
     }
 
+    .checkbox-row-column{
+      flex-direction:column;
+      align-items:stretch;
+    }
+
+    .checkbox-row-column .check-chip{
+      flex-basis:auto;
+    }
+
     .check-chip{
       display:flex;
       align-items:center;
@@ -309,7 +319,8 @@
       min-width:0;
     }
 
-    .check-chip input[type="checkbox"]{
+    .check-chip input[type="checkbox"],
+    .check-chip input[type="radio"]{
       width:auto !important;
       margin:0;
       cursor:pointer;

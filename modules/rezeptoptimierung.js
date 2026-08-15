@@ -280,6 +280,24 @@ function stripDiacritics(value) {
   return String(value || "").normalize("NFD").replace(/[̀-ͯ]/g, "");
 }
 
+const FREITEXT_STOPWORDS = new Set([
+  "der", "die", "das", "des", "dem", "den", "und", "mit", "bei", "von", "vom", "zum", "zur",
+  "auf", "nach", "seit", "wegen", "durch", "ohne", "im", "am",
+  "verdacht", "va", "zn", "stn", "st", "re", "li",
+  "chronisch", "chronische", "chronischer", "chronisches",
+  "akut", "akute", "akuter", "akutes",
+  "links", "rechts", "beidseits", "beidseitig", "syndrom"
+]);
+
+// Signifikante Wörter (>= 3 Zeichen, ohne Füllwörter) für den tolerantenen
+// Wort-für-Wort-Abgleich einer Freitext-Diagnose gegen Wörterbuch/Labels.
+function significantWords(text) {
+  return stripDiacritics(String(text || "").toLowerCase())
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length >= 3 && !FREITEXT_STOPWORDS.has(w));
+}
+
 export function normalisiereICD(code) {
   return String(code || "").trim().toUpperCase().replace(/\s/g, "");
 }
@@ -307,18 +325,58 @@ export function findeRegelFuerICD(code) {
 }
 
 // Textabgleich einer Freitext-Diagnose gegen die hinterlegten Diagnose-Labels
-// und das Synonym-Wörterbuch. Gibt die passende Regel zurück oder null.
+// und das Synonym-Wörterbuch. Wort-für-Wort statt nur Gesamt-String-Vergleich,
+// damit z.B. "chronische Rückenschmerzen" oder "Knie Arthrose" (andere
+// Wortreihenfolge / zusätzliche Wörter) ebenfalls erkannt werden.
 export function matchFreitext(text) {
   const raw = stripDiacritics(String(text || "").trim().toLowerCase());
   if (!raw) return null;
+  const rawNoSpace = raw.replace(/\s+/g, "");
+  const eingabeWoerter = significantWords(text);
 
+  // 1) Synonym-Wörterbuch: Ganzwort-Substring (bisheriges Verhalten) oder
+  // Übereinstimmung ohne Leerzeichen (z.B. "Knie Arthrose" -> "kniearthrose").
   for (const [keyword, praefix] of Object.entries(FREITEXT_SYNONYME)) {
-    if (raw.includes(stripDiacritics(keyword))) {
+    const keywordNorm = stripDiacritics(keyword);
+    if (raw.includes(keywordNorm) || rawNoSpace.includes(keywordNorm.replace(/\s+/g, ""))) {
       const regel = PRAEFIX_REGELN.find((r) => r.praefix === praefix);
       if (regel) return regel;
     }
   }
 
+  if (eingabeWoerter.length === 0) return null;
+
+  // Zwei Wörter gelten als gleich, wenn sie identisch sind, oder wenn das
+  // kürzere (ab 6 Zeichen, um generische Wortstämme wie "schmerz" als
+  // Fehltreffer auszuschließen) ein Präfix des längeren ist, z.B.
+  // "schulter" -> "schulterlaesion".
+  function woerterGleich(w1, w2) {
+    if (w1 === w2) return true;
+    const kurz = w1.length <= w2.length ? w1 : w2;
+    const lang = w1.length <= w2.length ? w2 : w1;
+    return kurz.length >= 6 && lang.startsWith(kurz);
+  }
+
+  // 2) Diagnose-Labels: alle signifikanten Wörter der kürzeren Seite (Eingabe
+  // oder Label) müssen in der jeweils anderen Seite vorkommen.
+  let bester = null;
+  let besterScore = 0;
+  for (const regel of PRAEFIX_REGELN) {
+    const labelWoerter = significantWords(regel.diagnose);
+    if (labelWoerter.length === 0) continue;
+
+    const kuerzer = eingabeWoerter.length <= labelWoerter.length ? eingabeWoerter : labelWoerter;
+    const laenger = eingabeWoerter.length <= labelWoerter.length ? labelWoerter : eingabeWoerter;
+    const vollstaendigEnthalten = kuerzer.every((w) => laenger.some((lw) => woerterGleich(w, lw)));
+
+    if (vollstaendigEnthalten && kuerzer.length > besterScore) {
+      bester = regel;
+      besterScore = kuerzer.length;
+    }
+  }
+  if (bester) return bester;
+
+  // 3) Fallback: gesamte Eingabe als Substring des Labels oder umgekehrt.
   const treffer = PRAEFIX_REGELN.find((r) => {
     const diagnoseLower = stripDiacritics(r.diagnose.toLowerCase());
     return diagnoseLower.includes(raw) || raw.includes(diagnoseLower);
