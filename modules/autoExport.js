@@ -1,8 +1,27 @@
 import { exportBackup } from "./backup.js";
 import { mutateRuntimeData, queuePersistRuntimeData } from "../core/app-core.js";
 
-const AUTO_EXPORT_INTERVAL_DAYS = 28;
+// TEMPORÄR auf 1 Tag gesetzt, um den automatischen Export im laufenden
+// Testbetrieb zu prüfen. Nach abgeschlossenem Test wieder auf 28 (4 Wochen)
+// zurücksetzen.
+const AUTO_EXPORT_INTERVAL_DAYS = 1;
 const EMAILJS_ENDPOINT = "https://api.emailjs.com/api/v1.0/email/send";
+
+// TEMPORÄRES Testpasswort für die Verschlüsselung des automatischen Exports.
+// Bewusst getrennt vom Praxispasswort, damit eine abgefangene E-Mail auch
+// ohne Kenntnis des echten Praxispassworts nicht lesbar ist. Wird in einer
+// späteren Session durch ein vom Nutzer im Viewer festlegbares Passwort
+// ersetzt (siehe HANDOFF_SUMMARY.md).
+const AUTO_EXPORT_TEST_PASSWORD = "FaSt-AutoExport-Test-2026!";
+
+// Fest hinterlegte EmailJS-Zugangsdaten. Bewusst nicht in den Einstellungen
+// sichtbar/änderbar (Vorgabe: kein Therapeut soll diese sehen oder ändern
+// können). Der Public Key ist bei EmailJS dafür vorgesehen, client-seitig
+// eingebettet zu werden (Absicherung erfolgt über Domain-Restriktion im
+// EmailJS-Dashboard, nicht über Geheimhaltung).
+const EMAILJS_SERVICE_ID = "service_85uo2dr";
+const EMAILJS_TEMPLATE_ID = "template_ffghrgk";
+const EMAILJS_PUBLIC_KEY = "nVDBHTKSRFftRdE9v";
 
 export function isAutoExportDue(data) {
   const lastAt = data?.ui?.lastAutoExportAt;
@@ -16,9 +35,8 @@ export function isAutoExportDue(data) {
 }
 
 export function isAutoExportConfigured(data) {
-  const autoExport = data?.settings?.autoExport || {};
   const bueroEmail = data?.settings?.buero?.email || "";
-  return !!(autoExport.emailjsServiceId && autoExport.emailjsTemplateId && autoExport.emailjsPublicKey && bueroEmail);
+  return !!bueroEmail;
 }
 
 function blobToBase64DataUrl(blob) {
@@ -31,25 +49,23 @@ function blobToBase64DataUrl(blob) {
 }
 
 // Sendet die exportierte Backup-Datei per EmailJS (client-seitiger, "public key"
-// basierter E-Mail-Versand ohne eigenes Backend - siehe emailjs.com). Damit das
-// tatsächlich funktioniert, muss in den Einstellungen ein EmailJS-Konto mit
-// Service, Template (Vorlage mit Variable-Attachment "attachment") und
-// Public Key hinterlegt sein. Das EmailJS-Template muss folgende Variablen
-// verwenden: to_email, subject, message, therapist_name, filename, attachment.
-async function sendExportViaEmailJs({ autoExportConfig, bueroEmail, therapistName, blob, filename }) {
+// basierter E-Mail-Versand ohne eigenes Backend - siehe emailjs.com). Das
+// EmailJS-Template muss folgende Variablen verwenden: to_email, subject,
+// message, therapist_name, filename, attachment (als "Variable Attachment").
+async function sendExportViaEmailJs({ bueroEmail, therapistName, blob, filename }) {
   const attachmentDataUrl = await blobToBase64DataUrl(blob);
 
   const response = await fetch(EMAILJS_ENDPOINT, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      service_id: autoExportConfig.emailjsServiceId,
-      template_id: autoExportConfig.emailjsTemplateId,
-      user_id: autoExportConfig.emailjsPublicKey,
+      service_id: EMAILJS_SERVICE_ID,
+      template_id: EMAILJS_TEMPLATE_ID,
+      user_id: EMAILJS_PUBLIC_KEY,
       template_params: {
         to_email: bueroEmail,
         subject: `FaSt-Doku Automatischer Export – ${therapistName || "Therapeut"}`,
-        message: `Automatischer 4-Wochen-Export von ${therapistName || "Therapeut"}. Enthält alle App-Daten, verschlüsselt mit dem Praxispasswort.`,
+        message: `Automatischer Export von ${therapistName || "Therapeut"}. Enthält alle App-Daten, verschlüsselt mit dem Export-Passwort (nicht dem Praxispasswort).`,
         therapist_name: therapistName || "",
         filename,
         attachment: attachmentDataUrl
@@ -83,9 +99,11 @@ function markAutoExportSent() {
 }
 
 // Wird beim App-Start (nach dem Entsperren) aufgerufen. Prüft, ob seit dem
-// letzten automatischen Export 4 Wochen vergangen sind, und verschickt in
-// diesem Fall im Hintergrund eine vollständige, verschlüsselte Kopie aller
-// App-Daten (identisches Format wie das manuelle Backup) an die Büro-E-Mail.
+// letzten automatischen Export AUTO_EXPORT_INTERVAL_DAYS vergangen sind
+// (aktuell temporär 1 Tag für den Testbetrieb, regulär 4 Wochen), und
+// verschickt in diesem Fall im Hintergrund eine vollständige, mit
+// AUTO_EXPORT_TEST_PASSWORD verschlüsselte Kopie aller App-Daten
+// (identisches Format wie das manuelle Backup) an die Büro-E-Mail.
 // Läuft komplett ohne Rückfrage an den Therapeuten (Vorgabe: "ohne
 // Bestätigung"). Gibt bei Erfolg { sent: true } zurück, damit die UI eine
 // kurze stille Meldung ("Export gesendet") anzeigen kann.
@@ -99,9 +117,8 @@ export async function runAutoExportIfDue(runtimeData) {
   }
 
   try {
-    const result = await exportBackup(runtimeData);
+    const result = await exportBackup(runtimeData, { overridePassword: AUTO_EXPORT_TEST_PASSWORD });
     await sendExportViaEmailJs({
-      autoExportConfig: runtimeData.settings.autoExport,
       bueroEmail: runtimeData.settings.buero.email,
       therapistName: runtimeData.settings.therapistName,
       blob: result.blob,

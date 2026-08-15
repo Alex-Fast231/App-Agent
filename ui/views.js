@@ -90,6 +90,7 @@ import {
 } from "../modules/rezeptoptimierung.js";
 import * as Assessment from "../modules/assessment.js";
 import { exportBackup, importBackup, downloadBlob, validateBackupZip } from "../modules/backup.js";
+import { parseRezeptOcrText } from "../modules/ocr.js";
 import { generateId } from "../core/utils.js";
 import {
   normalizeDeDateInput,
@@ -2832,8 +2833,8 @@ export function showHomeDetailView({ onLock, homeId, searchText = "" }) {
 
       <details class="accordion">
         <summary>
-          <span>Suche und Patient anlegen</span>
-          <span class="muted">Suche + neuer Patient</span>
+          <span>Suche</span>
+          <span class="muted">Nach Name oder Geburtsdatum</span>
         </summary>
         <div class="accordion-body">
           <label for="patientSearch">Suche nach Name oder Geburtsdatum</label>
@@ -2843,26 +2844,10 @@ export function showHomeDetailView({ onLock, homeId, searchText = "" }) {
             <button id="runPatientSearchBtn" class="secondary">Suchen</button>
             <button id="clearPatientSearchBtn" class="secondary">Suche löschen</button>
           </div>
-
-          <label for="lastName">Nachname</label>
-          <input id="lastName" type="text">
-
-          <label for="firstName">Vorname</label>
-          <input id="firstName" type="text">
-
-          <label for="birthDate">Geburtsdatum</label>
-          <input id="birthDate" type="text" placeholder="TT.MM.JJJJ" inputmode="numeric">
-
-          <div class="checkbox-row">
-            <label class="check-chip"><input id="hb" type="checkbox"> <span>Hausbesuch</span></label>
-            <label class="check-chip"><input id="verstorben" type="checkbox"> <span>Verstorben</span></label>
-          </div>
-          <p class="muted">Der Zuzahlungsstatus wird direkt nach dem Speichern abgefragt.</p>
-
-          <button id="createPatientBtn">Patient speichern</button>
-          <div id="patientMsg"></div>
         </div>
       </details>
+
+      <button id="openCreatePatientRezeptBtn" style="margin-top:12px;">Neuen Patienten + Rezept anlegen</button>
 
       <div class="list-stack" style="margin-top:12px;">
         ${filteredPatients.length === 0 ? `<p class="muted">Keine passenden Patienten gefunden.</p>` : ""}
@@ -3050,49 +3035,13 @@ export function showHomeDetailView({ onLock, homeId, searchText = "" }) {
     showHomeDetailView({ onLock, homeId, searchText: "" });
   };
 
-  bindDateAutoFormat(document.getElementById("birthDate"));
   document.querySelectorAll('[id^="edit-birthDate-"]').forEach((el) => bindDateAutoFormat(el));
   bindCheckChipToggles(app);
   bindQuickDocSelectionStyles(app);
   bindSelectableCardChecks(app);
 
-  document.getElementById("createPatientBtn").onclick = async () => {
-    const firstName = document.getElementById("firstName").value.trim();
-    const lastName = document.getElementById("lastName").value.trim();
-    const birthDate = document.getElementById("birthDate").value.trim();
-    const hb = document.getElementById("hb").checked;
-    const verstorben = document.getElementById("verstorben").checked;
-    const msg = document.getElementById("patientMsg");
-
-    msg.className = "error";
-    msg.textContent = "";
-
-    if (!firstName && !lastName) {
-      msg.textContent = "Bitte mindestens einen Namen eingeben.";
-      return;
-    }
-
-    try {
-      const newPatientId = createPatient(homeId, {
-        firstName,
-        lastName,
-        birthDate,
-        befreit: false,
-        hb,
-        verstorben
-      });
-      await queuePersistRuntimeData();
-      showZuzahlungsabfrageView({
-        onLock,
-        homeId,
-        patientId: newPatientId,
-        searchText,
-        onDone: () => showAssessmentAbfrageView({ onLock, homeId, patientId: newPatientId, searchText })
-      });
-    } catch (err) {
-      console.error(err);
-      msg.textContent = "Patient konnte nicht gespeichert werden.";
-    }
+  document.getElementById("openCreatePatientRezeptBtn").onclick = () => {
+    showCreatePatientRezeptView({ onLock, homeId, searchText });
   };
 
   document.querySelectorAll('.patientSectionBtn').forEach((btn) => {
@@ -3466,6 +3415,312 @@ export function showDoctorReportEditorView({ onLock, homeId, patientId, rezeptId
       alert(err?.message || 'Arztbericht konnte nicht gelöscht werden.');
     }
   };
+}
+
+// Lädt die lokal vendorte Tesseract.js-API-Datei einmalig nach (nicht bei
+// jedem App-Start, nur wenn "Rezept abfotografieren" tatsächlich genutzt
+// wird). Worker-Skript und WASM-Core werden ebenfalls lokal vendort
+// (vendor/tesseract/) und erst beim tatsächlichen Erkennen nachgeladen;
+// nur die Sprachdaten (deu.traineddata) kommen weiterhin aus Tesseract.js'
+// eigenem Standard-CDN, da diese mehrere MB groß sind. Das Foto selbst
+// verlässt dabei nie das Gerät - nur die (nicht personenbezogene)
+// Erkennungssoftware wird ggf. nachgeladen.
+function loadTesseractScript() {
+  if (globalThis.Tesseract) return Promise.resolve();
+  if (loadTesseractScript._promise) return loadTesseractScript._promise;
+  loadTesseractScript._promise = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "./vendor/tesseract/tesseract.min.js";
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("OCR-Engine konnte nicht geladen werden"));
+    document.head.appendChild(script);
+  });
+  return loadTesseractScript._promise;
+}
+
+// Kombinierter Flow: Patient anlegen und Rezept anlegen in einem Schritt
+// (statt wie bisher zwei getrennte Vorgänge). Wahlweise per manueller
+// Eingabe oder per Fotoerkennung (Tesseract.js OCR, läuft vollständig im
+// Browser, das Foto wird nach der Erkennung sofort verworfen).
+export function showCreatePatientRezeptView({ onLock, homeId, searchText = "" }) {
+  bindLockButton(onLock);
+  setCurrentView("create-patient-rezept", { homeId, searchText });
+
+  const runtimeData = getRuntimeData();
+  const home = getHomeById(runtimeData, homeId);
+  if (!home) {
+    showHomesView({ onLock });
+    return;
+  }
+
+  let cameraStream = null;
+  function stopCameraStream() {
+    if (cameraStream) {
+      cameraStream.getTracks().forEach((track) => track.stop());
+      cameraStream = null;
+    }
+  }
+
+  function renderModeSelection() {
+    stopCameraStream();
+    render(`
+      <div class="card">
+        <h2>Neuen Patienten + Rezept anlegen</h2>
+        <p class="muted">${escapeHtml(home.name || "Einrichtung")}</p>
+        <button id="backHomeDetailBtn" class="secondary">Zurück zum Heim</button>
+      </div>
+
+      <div class="card">
+        <h3>Eingabe</h3>
+        <button id="manualEntryBtn">Manuell eingeben</button>
+        <button id="photoEntryBtn" class="secondary">📷 Rezept abfotografieren</button>
+      </div>
+    `);
+
+    document.getElementById("backHomeDetailBtn").onclick = () => {
+      showHomeDetailView({ onLock, homeId, searchText });
+    };
+    document.getElementById("manualEntryBtn").onclick = () => renderCombinedForm(null);
+    document.getElementById("photoEntryBtn").onclick = () => renderCameraCapture();
+  }
+
+  function renderCameraCapture() {
+    render(`
+      <div class="card">
+        <h2>Rezept abfotografieren</h2>
+        <p class="muted">Das Foto wird nur im Browser verarbeitet und danach sofort verworfen. Es verlässt zu keinem Zeitpunkt das Gerät.</p>
+        <button id="backToModeBtn" class="secondary">Zurück</button>
+      </div>
+
+      <div class="card">
+        <video id="ocrVideo" autoplay playsinline muted style="width:100%; border-radius:12px; background:#000; display:block;"></video>
+        <canvas id="ocrCanvas" style="display:none;"></canvas>
+        <button id="ocrCaptureBtn" style="margin-top:12px;" disabled>Foto aufnehmen</button>
+        <div id="ocrMsg" class="muted" style="margin-top:10px;"></div>
+      </div>
+    `);
+
+    document.getElementById("backToModeBtn").onclick = () => renderModeSelection();
+
+    const video = document.getElementById("ocrVideo");
+    const captureBtn = document.getElementById("ocrCaptureBtn");
+    const msg = document.getElementById("ocrMsg");
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      msg.className = "error";
+      msg.textContent = "Kamera wird von diesem Browser nicht unterstützt. Bitte manuell eingeben.";
+      return;
+    }
+
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
+      .then((stream) => {
+        cameraStream = stream;
+        video.srcObject = stream;
+        captureBtn.disabled = false;
+      })
+      .catch((err) => {
+        console.error(err);
+        msg.className = "error";
+        msg.textContent = "Kamera konnte nicht geöffnet werden (" + (err?.message || err) + "). Bitte manuell eingeben.";
+      });
+
+    captureBtn.onclick = async () => {
+      const canvas = document.getElementById("ocrCanvas");
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      canvas.getContext("2d").drawImage(video, 0, 0);
+      // Kamera sofort stoppen, sobald das Bild im Canvas liegt.
+      stopCameraStream();
+
+      captureBtn.disabled = true;
+      msg.className = "muted";
+      msg.textContent = "Text wird erkannt ...";
+
+      let worker = null;
+      // Eigener Timeout, unabhängig davon, ob Tesseract.js/der Worker im
+      // Fehlerfall (z.B. kein Netz für die Sprachdaten-CDN) sauber
+      // ablehnt oder hängen bleibt - die UI darf nie dauerhaft auf
+      // "Text wird erkannt ..." stehen bleiben.
+      const ocrTimeout = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error("Texterkennung hat zu lange gedauert (Zeitüberschreitung)")), 30000);
+      });
+
+      try {
+        await loadTesseractScript();
+        const data = await Promise.race([
+          (async () => {
+            worker = await globalThis.Tesseract.createWorker("deu", 1, {
+              corePath: "./vendor/tesseract/tesseract-core-simd-lstm.wasm.js",
+              workerPath: "./vendor/tesseract/worker.min.js"
+            });
+            const result = await worker.recognize(canvas);
+            return result.data;
+          })(),
+          ocrTimeout
+        ]);
+        const parsed = parseRezeptOcrText(data?.text || "");
+        renderCombinedForm(parsed);
+      } catch (err) {
+        console.error("OCR fehlgeschlagen:", err);
+        msg.className = "error";
+        msg.textContent = "Texterkennung fehlgeschlagen (evtl. keine Internetverbindung für die Spracherkennung). Bitte manuell eingeben.";
+        captureBtn.disabled = false;
+      } finally {
+        if (worker) worker.terminate().catch(() => {});
+        // Foto/Canvas-Daten sofort verwerfen, unabhängig vom Ergebnis.
+        const ctx = canvas.getContext("2d");
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        canvas.width = 0;
+        canvas.height = 0;
+      }
+    };
+  }
+
+  function renderCombinedForm(prefill) {
+    stopCameraStream();
+    const arztRegistry = getArztRegistry(runtimeData);
+
+    render(`
+      <div class="card">
+        <h2>Neuen Patienten + Rezept anlegen</h2>
+        <p class="muted">${escapeHtml(home.name || "Einrichtung")}</p>
+        ${prefill ? `<p class="muted">Aus Foto erkannt – bitte prüfen und ggf. korrigieren.</p>` : ""}
+        <button id="backToModeBtn" class="secondary">Zurück</button>
+      </div>
+
+      <div class="card">
+        <h3>Patient</h3>
+        <label for="firstName">Vorname</label>
+        <input id="firstName" type="text" value="${escapeHtml(prefill?.firstName || "")}">
+
+        <label for="lastName">Nachname</label>
+        <input id="lastName" type="text" value="${escapeHtml(prefill?.lastName || "")}">
+
+        <label for="birthDate">Geburtsdatum</label>
+        <input id="birthDate" type="text" placeholder="TT.MM.JJJJ" inputmode="numeric" value="${escapeHtml(prefill?.birthDate || "")}">
+
+        <div class="checkbox-row">
+          <label class="check-chip"><input id="hb" type="checkbox"> <span>Hausbesuch</span></label>
+          <label class="check-chip"><input id="verstorben" type="checkbox"> <span>Verstorben</span></label>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Rezept</h3>
+        <label for="arzt">Arzt</label>
+        <input id="arzt" type="text" list="doctorSuggestions" autocomplete="off" value="${escapeHtml(prefill?.arzt || "")}">
+        <datalist id="doctorSuggestions">
+          ${getKnownDoctorNames(runtimeData).map((name) => `<option value="${escapeHtml(name)}"></option>`).join("")}
+        </datalist>
+
+        <label for="arztAdresse">Arztadresse</label>
+        <input id="arztAdresse" type="text" placeholder="Straße, PLZ Ort">
+
+        <label for="ausstell">Ausstellungsdatum</label>
+        <input id="ausstell" type="text" placeholder="TT.MM.JJJJ" inputmode="numeric" value="${escapeHtml(prefill?.ausstell || "")}">
+
+        <div class="checkbox-row">
+          <label class="check-chip"><input id="bg" type="checkbox"> <span>BG</span></label>
+          <label class="check-chip"><input id="dt" type="checkbox"> <span>Doppeltermin</span></label>
+          <label class="check-chip"><input id="dringend" type="checkbox"> <span>Dringender Bedarf</span></label>
+        </div>
+
+        <label for="icd10">ICD-10 Code</label>
+        <input id="icd10" type="text" placeholder="z.B. M54.5" value="${escapeHtml(prefill?.icd10 || "")}">
+
+        ${renderLeitsymptomatikField("")}
+
+        <label for="hausbesuch">Hausbesuch (Rezeptvermerk)</label>
+        ${renderJaNeinSelect("hausbesuch", "")}
+
+        <label for="arztStempel">Arzt-Stempel vorhanden</label>
+        ${renderJaNeinSelect("arztStempel", "")}
+
+        <label for="arztUnterschrift">Arzt-Unterschrift vorhanden</label>
+        ${renderJaNeinSelect("arztUnterschrift", "")}
+
+        <h3 style="margin-top:20px;">Leistungen</h3>
+        ${renderRezeptItemsEditor(prefill?.heilmittel ? [{ type: prefill.heilmittel, count: prefill.anzahl || "" }] : [])}
+
+        <div id="rezeptPruefungPanel" style="margin-top:16px;"></div>
+
+        <button id="saveCombinedBtn">Patient + Rezept speichern</button>
+        <div id="combinedMsg"></div>
+      </div>
+    `);
+
+    document.getElementById("backToModeBtn").onclick = () => renderModeSelection();
+
+    bindDateAutoFormat(document.getElementById("birthDate"));
+    bindDateAutoFormat(document.getElementById("ausstell"));
+    bindIcdAutoFormat(document.getElementById("icd10"));
+    bindRezeptItemsEditor(prefill?.heilmittel ? [{ type: prefill.heilmittel, count: prefill.anzahl || "" }] : []);
+    bindCheckChipToggles(app);
+    bindQuickDocSelectionStyles(app);
+    bindSelectableCardChecks(app);
+    bindLeitsymptomatikField();
+    bindRezeptPruefungLive("rezeptPruefungPanel");
+
+    const arztInput = document.getElementById("arzt");
+    const arztAdresseInput = document.getElementById("arztAdresse");
+    arztInput.addEventListener("input", () => {
+      const match = arztRegistry.find((a) => a.name === arztInput.value.trim());
+      arztAdresseInput.value = match?.adresse || "";
+    });
+
+    document.getElementById("saveCombinedBtn").onclick = async () => {
+      const msg = document.getElementById("combinedMsg");
+      msg.className = "error";
+      msg.textContent = "";
+
+      const firstName = document.getElementById("firstName").value.trim();
+      const lastName = document.getElementById("lastName").value.trim();
+      const birthDate = document.getElementById("birthDate").value.trim();
+      const hb = document.getElementById("hb").checked;
+      const verstorben = document.getElementById("verstorben").checked;
+
+      if (!firstName && !lastName) {
+        msg.textContent = "Bitte mindestens einen Namen für den Patienten eingeben.";
+        return;
+      }
+
+      const rezeptPayload = collectRezeptFormPayload();
+      if (rezeptPayload.items.length === 0) {
+        msg.textContent = "Bitte mindestens eine Leistung angeben.";
+        return;
+      }
+
+      try {
+        const newPatientId = createPatient(homeId, {
+          firstName,
+          lastName,
+          birthDate,
+          befreit: false,
+          hb,
+          verstorben
+        });
+        createRezept(homeId, newPatientId, rezeptPayload);
+        const arztAdresse = arztAdresseInput.value.trim();
+        if (rezeptPayload.arzt && arztAdresse) {
+          upsertArztAdresse(rezeptPayload.arzt, arztAdresse);
+        }
+
+        await queuePersistRuntimeData();
+        showZuzahlungsabfrageView({
+          onLock,
+          homeId,
+          patientId: newPatientId,
+          searchText,
+          onDone: () => showAssessmentAbfrageView({ onLock, homeId, patientId: newPatientId, searchText })
+        });
+      } catch (err) {
+        console.error(err);
+        msg.textContent = "Patient/Rezept konnten nicht gespeichert werden.";
+      }
+    };
+  }
+
+  renderModeSelection();
 }
 
 // Wird direkt nach dem Anlegen eines neuen Patienten aufgerufen (Funktion 3).
@@ -5405,15 +5660,24 @@ function renderAbgabeSheetHtml(rows, options = {}) {
       <div><strong>Therapeut:</strong> ${escapeHtml(therapistName)}</div>
       <div><strong>Erstellt am:</strong> ${escapeHtml(createdAtLabel)}</div>
     </div>
-    ${normalizedRows.map((row) => `
-      <div class="row">
+    ${normalizedRows.map((row) => {
+      // Rahmen-Hervorhebung nur im PDF/Ausdruck, nicht in der App-Ansicht:
+      // Befreit (orange) hat Vorrang vor Doppeltermin (blau).
+      const highlightStyle = row.befreit
+        ? "border:2px solid #c2410c; border-radius:8px; padding:8px 10px;"
+        : row.dt
+          ? "border:2px solid #1d4ed8; border-radius:8px; padding:8px 10px;"
+          : "";
+      return `
+      <div class="row" style="${highlightStyle}">
         <strong>${escapeHtml(row.patient || "—")}</strong> · ${escapeHtml(row.heim || "—")}<br>
         <span class="muted">Arzt: ${escapeHtml(row.arzt || "—")}</span><br>
         <span class="muted">Ausstellung: ${escapeHtml(row.ausstell || "—")}</span><br>
         <span class="muted">Leistung: ${escapeHtml(row.leistung || "—")} ${escapeHtml(row.anzahl || "")}</span><br>
         ${formatAbgabeZusatz(row) ? `<span class="muted">${escapeHtml(formatAbgabeZusatz(row))}</span>` : ""}
       </div>
-    `).join("")}
+    `;
+    }).join("")}
   `;
 }
 
@@ -5472,16 +5736,8 @@ export function showAbgabeView({ onLock, searchText = "", selectedIds = [] }) {
                     ${rezeptRows.map(rawRow => {
                       // "befreit" steckt im Baum am Patienten, nicht am Rezept selbst.
                       const row = { ...rawRow, befreit: patient.befreit };
-                      // Umrandung statt Farbfüllung, damit die Selektions-Hervorhebung
-                      // (Klick auf die Karte, .is-selected) weiterhin sichtbar bleibt –
-                      // outline statt border/box-shadow vermeidet Property-Konflikte.
-                      const highlightStyle = row.befreit
-                        ? "outline:2px solid #c2410c; outline-offset:2px;"
-                        : row.dt
-                          ? "outline:2px solid #1d4ed8; outline-offset:2px;"
-                          : "";
                       return `
-                      <div class="compact-card selectable-card" style="${highlightStyle}">
+                      <div class="compact-card selectable-card">
                         <label style="display:flex; gap:10px; align-items:flex-start; font-weight:normal;">
                           <input class="abgabeCheck" type="checkbox" data-row-id="${row.rowId}" style="width:auto;" ${selected.has(row.rowId) ? "checked" : ""}>
                           <span>
