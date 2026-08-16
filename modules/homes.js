@@ -1,6 +1,6 @@
 import { getRuntimeData, mutateRuntimeData } from "../core/app-core.js";
 import { compareDeDates, isDateInRange, parseComparableDate, getComparableFromDate } from "../core/date-utils.js";
-import { generateId, getRezeptAusstellungsdatum } from "../core/utils.js";
+import { generateId, getRezeptAusstellungsdatum, formatPatientName } from "../core/utils.js";
 import { REMINDER_INTERVAL_DAYS } from "./assessment.js";
 
 function normalizeTimeType(type) {
@@ -164,7 +164,7 @@ function getPointForPatient(home, patient, kilometerState) {
   if (patient?.hb && hbAddress) {
     return {
       pointId: `hb:${patient.patientId}`,
-      label: `${patient.firstName || ""} ${patient.lastName || ""}`.trim() || "Hausbesuch",
+      label: formatPatientName(patient) || "Hausbesuch",
       address: hbAddress,
       kind: "hb"
     };
@@ -213,7 +213,7 @@ function collectKilometerPoints(data) {
       if (patient?.hb && String(patient?.hbAddress || '').trim()) {
         addPoint({
           pointId: `hb:${patient.patientId}`,
-          label: `${patient.firstName || ''} ${patient.lastName || ''}`.trim() || 'Hausbesuch',
+          label: formatPatientName(patient) || 'Hausbesuch',
           address: String(patient.hbAddress || '').trim(),
           kind: 'hb'
         });
@@ -325,12 +325,6 @@ function appendTravelLogIfPossible(data, homeId, patientId, dateInput, relatedEn
 
   kilometerState.travelLog.push(travel);
   return travel;
-}
-
-export function getPendingKilometerContext(homeId, patientId, dateInput) {
-  const data = getRuntimeData();
-  if (!data) throw new Error("Kein runtimeData Zustand vorhanden");
-  return buildPendingKilometerContextFromData(data, homeId, patientId, dateInput);
 }
 
 export function saveKilometerStartPoint(payload) {
@@ -638,14 +632,6 @@ export function updateHomeAddress(homeId, adresse) {
     const home = getHomeById(data, homeId);
     if (!home) throw new Error("Heim nicht gefunden");
     home.adresse = String(adresse || "").trim();
-  });
-}
-
-export function updateHomeVerwaltungsEmail(homeId, verwaltungsEmail) {
-  mutateRuntimeData((data) => {
-    const home = getHomeById(data, homeId);
-    if (!home) throw new Error("Heim nicht gefunden");
-    home.verwaltungsEmail = String(verwaltungsEmail || "").trim();
   });
 }
 
@@ -1066,6 +1052,7 @@ export function createRezept(homeId, patientId, payload) {
       dt: !!payload.dt,
       dringend: !!payload.dringend,
       icd10: (payload.icd10 || "").trim(),
+      icd10b: (payload.icd10b || "").trim(),
       leitsymptomatik: (payload.leitsymptomatik || "").trim(),
       hausbesuch: payload.hausbesuch === "ja" || payload.hausbesuch === "nein" ? payload.hausbesuch : "",
       arztStempel: payload.arztStempel === "ja" || payload.arztStempel === "nein" ? payload.arztStempel : "",
@@ -1114,6 +1101,7 @@ export function updateRezept(homeId, patientId, rezeptId, payload) {
     rezept.dt = !!payload.dt;
     rezept.dringend = !!payload.dringend;
     rezept.icd10 = (payload.icd10 || "").trim();
+    rezept.icd10b = (payload.icd10b || "").trim();
     rezept.leitsymptomatik = (payload.leitsymptomatik || "").trim();
     rezept.hausbesuch = payload.hausbesuch === "ja" || payload.hausbesuch === "nein" ? payload.hausbesuch : "";
     rezept.arztStempel = payload.arztStempel === "ja" || payload.arztStempel === "nein" ? payload.arztStempel : "";
@@ -1558,7 +1546,7 @@ export function buildNachbestellRows(data) {
         rows.push({
           rowId: `${home.homeId}_${patient.patientId}_${rezept.rezeptId}`,
           doctor: rezept.arzt || "",
-          patient: `${patient.firstName || ""} ${patient.lastName || ""}`.trim(),
+          patient: formatPatientName(patient),
           patientFirstName: patient.firstName || "",
           patientLastName: patient.lastName || "",
           geb: patient.birthDate || "",
@@ -1647,23 +1635,6 @@ export function deleteAbgabeHistoryItem(historyId) {
   if (!targetId) return;
   mutateRuntimeData((data) => {
     data.abgabeHistory = (data.abgabeHistory || []).filter((item) => item.id !== targetId);
-  });
-}
-
-export function saveNachbestellHistory(title, doctor, rows) {
-  mutateRuntimeData((data) => {
-    data.nachbestellHistory.unshift({
-      id: generateId("nachbestellung"),
-      createdAt: new Date().toISOString(),
-      title: title || "Nachbestellung",
-      doctor: doctor || "",
-      lines: rows.map((row) => ({
-        patient: row.patient || "",
-        geb: row.geb || "",
-        heim: row.heim || "",
-        text: row.text || ""
-      }))
-    });
   });
 }
 

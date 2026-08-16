@@ -80,7 +80,11 @@ function extractDates(text) {
   return { birthDate: birthDate || "", ausstell: ausstellDate || "" };
 }
 
-function extractIcd10(text) {
+// Das GKV-Muster 13 (Heilmittelverordnung) sieht im Feld "Diagnose(n)
+// (ICD-10-Code)" Platz für einen, in der Praxis gelegentlich auch für
+// zwei Codes vor (Haupt-/Nebendiagnose) - daher werden bis zu zwei
+// eindeutige Treffer zurückgegeben.
+function extractIcd10Codes(text) {
   const matches = [];
   let match;
   ICD10_PATTERN.lastIndex = 0;
@@ -89,9 +93,25 @@ function extractIcd10(text) {
     const digits = match[2];
     const decimals = match[3];
     const code = decimals ? `${letter}${digits}.${decimals}` : `${letter}${digits}`;
-    matches.push(code);
+    if (!matches.includes(code)) matches.push(code);
   }
-  return matches[0] || "";
+  return { icd10: matches[0] || "", icd10b: matches[1] || "" };
+}
+
+// Sucht die Zeile mit dem Formular-Label "Leitsymptomatik" (Muster 13)
+// und liefert den nachfolgenden Text als Freitext-Vorschlag - ein
+// Abgleich mit den drei standardisierten Kategorien a/b/c erfolgt
+// bewusst nicht hier, sondern beim Rendern im Formular (Freitext-Fall).
+function extractLeitsymptomatik(text) {
+  const lines = normalizeWhitespace(text).split("\n").map((l) => l.trim()).filter(Boolean);
+  const idx = lines.findIndex((line) => /leitsymptomatik/i.test(line));
+  if (idx === -1) return "";
+
+  const sameLine = lines[idx].replace(/.*leitsymptomatik\s*[:\-]?\s*/i, "").trim();
+  if (sameLine) return sameLine.slice(0, 200);
+
+  const nextLine = lines[idx + 1] || "";
+  return /diagnose|icd|heilmittel|verordnungsmenge/i.test(nextLine) ? "" : nextLine.slice(0, 200);
 }
 
 function extractArzt(text) {
@@ -141,6 +161,7 @@ export function parseRezeptOcrText(rawText) {
   const text = String(rawText || "");
   const dates = extractDates(text);
   const name = extractPatientName(text);
+  const icdCodes = extractIcd10Codes(text);
 
   return {
     firstName: name.firstName,
@@ -148,7 +169,9 @@ export function parseRezeptOcrText(rawText) {
     birthDate: dates.birthDate,
     arzt: extractArzt(text),
     ausstell: dates.ausstell,
-    icd10: extractIcd10(text),
+    icd10: icdCodes.icd10,
+    icd10b: icdCodes.icd10b,
+    leitsymptomatik: extractLeitsymptomatik(text),
     heilmittel: extractHeilmittel(text),
     anzahl: extractAnzahl(text)
   };

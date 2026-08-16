@@ -1,4 +1,4 @@
-import { createEmptyAppData } from "../data/schema.js";
+import { createEmptyAppData, APP_VERSION } from "../data/schema.js";
 import { setupSecurity, unlockWithPIN } from "../security/auth.js";
 import { getRemainingLockoutMs } from "../security/lock.js";
 import {
@@ -89,9 +89,10 @@ import {
   getDefaultLeitsymptomatik
 } from "../modules/rezeptoptimierung.js";
 import * as Assessment from "../modules/assessment.js";
+import * as AssessmentInfo from "../modules/assessmentInfo.js";
 import { exportBackup, importBackup, downloadBlob, validateBackupZip } from "../modules/backup.js";
 import { parseRezeptOcrText } from "../modules/ocr.js";
-import { generateId } from "../core/utils.js";
+import { generateId, formatPatientName } from "../core/utils.js";
 import {
   normalizeDeDateInput,
   parseDeDate,
@@ -1086,21 +1087,42 @@ const LEITSYMPTOMATIK_OPTIONEN = [
   { val: "custom", label: "Patientenindividuell (Freitext)", text: "" }
 ];
 
-function matchLeitsymptomatikWahl(value) {
-  const trimmed = String(value || "").trim();
-  if (!trimmed) return "";
-  const match = LEITSYMPTOMATIK_OPTIONEN.find((opt) => opt.val !== "custom" && opt.text === trimmed);
-  return match ? match.val : "custom";
+// Leitsymptomatik wird intern weiterhin als ein einzelner String gespeichert
+// (Kompatibilität mit Rezeptprüfung/Anzeige/Export), bei Mehrfachauswahl
+// werden die Texte der ausgewählten Optionen mit "; " verbunden.
+function parseLeitsymptomatikSelection(value) {
+  const parts = String(value || "").split(";").map((p) => p.trim()).filter(Boolean);
+  const selectedVals = [];
+  const customParts = [];
+  parts.forEach((part) => {
+    const opt = LEITSYMPTOMATIK_OPTIONEN.find((o) => o.val !== "custom" && o.text === part);
+    if (opt) selectedVals.push(opt.val);
+    else customParts.push(part);
+  });
+  return { selectedVals, customText: customParts.join("; ") };
 }
 
 function renderLeitsymptomatikField(currentValue) {
-  const wahl = matchLeitsymptomatikWahl(currentValue);
+  const { selectedVals, customText } = parseLeitsymptomatikSelection(currentValue);
+  const selected = new Set(selectedVals);
   return `
     <label>Leitsymptomatik</label>
-    ${renderRadioGroup("leitsymptomatikWahl", LEITSYMPTOMATIK_OPTIONEN, wahl)}
-    <div id="leitsymptomatikCustomWrap" style="display:${wahl === "custom" ? "block" : "none"};">
+    <p class="muted" style="margin-top:-4px;">Mehrfachauswahl möglich.</p>
+    <div class="checkbox-row checkbox-row-column">
+      ${LEITSYMPTOMATIK_OPTIONEN.filter((opt) => opt.val !== "custom").map((opt) => `
+        <label class="check-chip" style="justify-content:flex-start; margin-bottom:6px;">
+          <input type="checkbox" name="leitsymptomatikWahl" class="leitsymptomatikWahl" value="${escapeHtml(opt.val)}" ${selected.has(opt.val) ? "checked" : ""}>
+          <span>${escapeHtml(opt.label)}</span>
+        </label>
+      `).join("")}
+      <label class="check-chip" style="justify-content:flex-start; margin-bottom:6px;">
+        <input type="checkbox" id="leitsymptomatikCustomToggle" ${customText ? "checked" : ""}>
+        <span>Patientenindividuell (Freitext)</span>
+      </label>
+    </div>
+    <div id="leitsymptomatikCustomWrap" style="display:${customText ? "block" : "none"};">
       <label for="leitsymptomatikCustom">Patientenindividuelle Leitsymptomatik</label>
-      <input id="leitsymptomatikCustom" type="text" placeholder="Freitext" value="${escapeHtml(wahl === "custom" ? currentValue || "" : "")}">
+      <input id="leitsymptomatikCustom" type="text" placeholder="Freitext" value="${escapeHtml(customText)}">
     </div>
     <input id="leitsymptomatik" type="hidden" value="${escapeHtml(currentValue || "")}">
   `;
@@ -1111,27 +1133,30 @@ function bindLeitsymptomatikField() {
   const hidden = document.getElementById("leitsymptomatik");
   const customWrap = document.getElementById("leitsymptomatikCustomWrap");
   const customInput = document.getElementById("leitsymptomatikCustom");
+  const customToggle = document.getElementById("leitsymptomatikCustomToggle");
 
-  const applyWahl = () => {
-    const wahl = getRadioValue("leitsymptomatikWahl");
-    if (wahl === "custom") {
+  const applySelection = () => {
+    const parts = Array.from(document.querySelectorAll(".leitsymptomatikWahl:checked"))
+      .map((cb) => LEITSYMPTOMATIK_OPTIONEN.find((o) => o.val === cb.value)?.text)
+      .filter(Boolean);
+
+    if (customToggle.checked) {
       customWrap.style.display = "block";
-      hidden.value = customInput.value.trim();
+      const customVal = customInput.value.trim();
+      if (customVal) parts.push(customVal);
     } else {
       customWrap.style.display = "none";
-      const opt = LEITSYMPTOMATIK_OPTIONEN.find((o) => o.val === wahl);
-      hidden.value = opt ? opt.text : "";
     }
+
+    hidden.value = parts.join("; ");
     hidden.dispatchEvent(new Event("input", { bubbles: true }));
   };
 
-  document.querySelectorAll('input[name="leitsymptomatikWahl"]').forEach((radio) => {
-    radio.addEventListener("change", applyWahl);
+  document.querySelectorAll(".leitsymptomatikWahl").forEach((cb) => {
+    cb.addEventListener("change", applySelection);
   });
-  customInput.addEventListener("input", () => {
-    hidden.value = customInput.value.trim();
-    hidden.dispatchEvent(new Event("input", { bubbles: true }));
-  });
+  customToggle.addEventListener("change", applySelection);
+  customInput.addEventListener("input", applySelection);
 }
 
 function bindIcdAutoFormat(inputEl) {
@@ -1141,6 +1166,64 @@ function bindIcdAutoFormat(inputEl) {
     inputEl.value = formatICD(inputEl.value);
     if (cursorAtEnd) inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
   });
+}
+
+// Arztadresse wird im Register (data.aerzte) weiterhin als ein einzelner
+// String gespeichert (Kompatibilität mit Freikuvert-Versand u.a.), im
+// Rezept-Formular aber als Straße/PLZ/Ort getrennt erfasst und angezeigt
+// (u.a. für eine GKV-Muster-16-nahe Darstellung, siehe Aufgabe 9).
+function splitArztAdresse(adresse) {
+  const trimmed = String(adresse || "").trim();
+  if (!trimmed) return { strasse: "", plz: "", ort: "" };
+  const match = trimmed.match(/^(.*?),?\s*(\d{5})\s+(.+)$/);
+  if (match) {
+    return { strasse: match[1].trim(), plz: match[2], ort: match[3].trim() };
+  }
+  return { strasse: trimmed, plz: "", ort: "" };
+}
+
+function joinArztAdresse(strasse, plz, ort) {
+  const plzOrt = [String(plz || "").trim(), String(ort || "").trim()].filter(Boolean).join(" ");
+  return [String(strasse || "").trim(), plzOrt].filter(Boolean).join(", ");
+}
+
+function renderArztAdresseFields(adresse) {
+  const parts = splitArztAdresse(adresse);
+  return `
+    <label for="arztStrasse">Arztadresse (Straße, Hausnummer)</label>
+    <input id="arztStrasse" type="text" placeholder="z.B. Musterstraße 5" value="${escapeHtml(parts.strasse)}">
+    <div class="row">
+      <div style="flex:1;">
+        <label for="arztPlz">PLZ</label>
+        <input id="arztPlz" type="text" inputmode="numeric" maxlength="5" placeholder="12345" value="${escapeHtml(parts.plz)}">
+      </div>
+      <div style="flex:2;">
+        <label for="arztOrt">Ort</label>
+        <input id="arztOrt" type="text" placeholder="Musterstadt" value="${escapeHtml(parts.ort)}">
+      </div>
+    </div>
+  `;
+}
+
+function bindArztAdresseAutofill(arztInput, arztRegistry) {
+  const strasseInput = document.getElementById("arztStrasse");
+  const plzInput = document.getElementById("arztPlz");
+  const ortInput = document.getElementById("arztOrt");
+  arztInput.addEventListener("input", () => {
+    const match = arztRegistry.find((a) => a.name === arztInput.value.trim());
+    const parts = splitArztAdresse(match?.adresse || "");
+    strasseInput.value = parts.strasse;
+    plzInput.value = parts.plz;
+    ortInput.value = parts.ort;
+  });
+}
+
+function collectArztAdresseFromForm() {
+  return joinArztAdresse(
+    document.getElementById("arztStrasse").value,
+    document.getElementById("arztPlz").value,
+    document.getElementById("arztOrt").value
+  );
 }
 
 function renderZuzahlungsstatusSelect(id, value) {
@@ -1383,6 +1466,7 @@ function collectRezeptFormPayload() {
     dt: document.getElementById("dt").checked,
     dringend: document.getElementById("dringend").checked,
     icd10: document.getElementById("icd10").value.trim(),
+    icd10b: document.getElementById("icd10b")?.value.trim() || "",
     leitsymptomatik: document.getElementById("leitsymptomatik").value.trim(),
     hausbesuch: document.getElementById("hausbesuch").value,
     arztStempel: document.getElementById("arztStempel").value,
@@ -1416,7 +1500,7 @@ function bindRezeptPruefungLive(panelId) {
     panel.innerHTML = renderRezeptPruefungPanel(validation);
   };
 
-  ["arzt", "ausstell", "bg", "dt", "dringend", "icd10", "leitsymptomatik", "hausbesuch", "arztStempel", "arztUnterschrift"]
+  ["arzt", "ausstell", "bg", "dt", "dringend", "icd10", "icd10b", "leitsymptomatik", "hausbesuch", "arztStempel", "arztUnterschrift"]
     .forEach((id) => {
       const el = document.getElementById(id);
       if (el) el.addEventListener("input", refresh);
@@ -1750,7 +1834,7 @@ function formatDoctorReportBodyHtml(content = "") {
 function renderDoctorReportPrintHtml({ settings = {}, patient = {}, rezept = {}, report = {} }) {
   const headerLines = getPracticeHeaderLines(settings);
   const createdDate = formatIsoDateShort(report?.createdAt);
-  const patientName = `${patient?.firstName || ""} ${patient?.lastName || ""}`.trim() || 'Patient/in';
+  const patientName = formatPatientName(patient) || 'Patient/in';
   const assessmentSummary = buildAssessmentSummaryLines(patient);
 
   const therapieziele = [...(report?.therapieziele || []), report?.therapiezielFreitext].filter(Boolean).join(", ");
@@ -2246,6 +2330,13 @@ export function showSettingsView({ onLock }) {
       <button id="saveSettingsBtn">Änderungen speichern</button>
       <div id="settingsMessage"></div>
     </div>
+
+    <div class="card">
+      <h3>App-Version</h3>
+      <p class="muted">Aktuelle Version: ${escapeHtml(APP_VERSION)}</p>
+      <button id="checkForUpdatesBtn" class="secondary">Aktualisieren</button>
+      <div id="updateCheckMsg" class="muted" style="margin-top:10px;"></div>
+    </div>
   `);
 
   bindCheckChipToggles(app);
@@ -2316,6 +2407,24 @@ export function showSettingsView({ onLock }) {
       msg.className = "error";
       msg.textContent = err?.message || "Einstellungen konnten nicht gespeichert werden.";
     }
+  };
+
+  document.getElementById("checkForUpdatesBtn").onclick = async () => {
+    const updateMsg = document.getElementById("updateCheckMsg");
+    updateMsg.textContent = "Suche nach Updates ...";
+    try {
+      // Eventuell vorhandene Browser-Caches leeren, damit garantiert die
+      // neueste vom Server ausgelieferte Version geladen wird (die App hat
+      // keinen Service Worker mehr, aber ältere Geräte könnten noch
+      // Caches aus einer früheren Version haben).
+      if ("caches" in window) {
+        const cacheKeys = await caches.keys();
+        await Promise.all(cacheKeys.map((key) => caches.delete(key)));
+      }
+    } catch (err) {
+      console.error("Cache konnte nicht geleert werden:", err);
+    }
+    window.location.reload();
   };
 }
 
@@ -3230,7 +3339,7 @@ export function showHomeDetailView({ onLock, homeId, searchText = "" }) {
     btn.onclick = async () => {
       const patientId = btn.dataset.patientId;
       const patient = (home.patients || []).find((p) => p.patientId === patientId);
-      const patientLabel = patient ? `${patient.firstName} ${patient.lastName}`.trim() || "Patient" : "Patient";
+      const patientLabel = patient ? formatPatientName(patient) || "Patient" : "Patient";
       const ok = confirm(`${patientLabel} wirklich löschen? Alle Rezepte und Dokumentationen dieses Patienten werden ebenfalls gelöscht.`);
       if (!ok) return;
 
@@ -3262,7 +3371,7 @@ export function showDoctorReportEditorView({ onLock, homeId, patientId, rezeptId
     return;
   }
 
-  const patientName = `${patient.firstName || ''} ${patient.lastName || ''}`.trim() || 'Patient/in';
+  const patientName = formatPatientName(patient) || 'Patient/in';
   const assessmentSummary = buildAssessmentSummaryLines(patient);
 
   render(`
@@ -3590,18 +3699,17 @@ export function showCreatePatientRezeptView({ onLock, homeId, searchText = "" })
 
       <div class="card">
         <h3>Patient</h3>
-        <label for="firstName">Vorname</label>
-        <input id="firstName" type="text" value="${escapeHtml(prefill?.firstName || "")}">
-
         <label for="lastName">Nachname</label>
         <input id="lastName" type="text" value="${escapeHtml(prefill?.lastName || "")}">
+
+        <label for="firstName">Vorname</label>
+        <input id="firstName" type="text" value="${escapeHtml(prefill?.firstName || "")}">
 
         <label for="birthDate">Geburtsdatum</label>
         <input id="birthDate" type="text" placeholder="TT.MM.JJJJ" inputmode="numeric" value="${escapeHtml(prefill?.birthDate || "")}">
 
         <div class="checkbox-row">
           <label class="check-chip"><input id="hb" type="checkbox"> <span>Hausbesuch</span></label>
-          <label class="check-chip"><input id="verstorben" type="checkbox"> <span>Verstorben</span></label>
         </div>
       </div>
 
@@ -3613,22 +3721,28 @@ export function showCreatePatientRezeptView({ onLock, homeId, searchText = "" })
           ${getKnownDoctorNames(runtimeData).map((name) => `<option value="${escapeHtml(name)}"></option>`).join("")}
         </datalist>
 
-        <label for="arztAdresse">Arztadresse</label>
-        <input id="arztAdresse" type="text" placeholder="Straße, PLZ Ort">
+        ${renderArztAdresseFields("")}
 
         <label for="ausstell">Ausstellungsdatum</label>
         <input id="ausstell" type="text" placeholder="TT.MM.JJJJ" inputmode="numeric" value="${escapeHtml(prefill?.ausstell || "")}">
 
+        <label for="icd10">ICD-10 Code</label>
+        <input id="icd10" type="text" placeholder="z.B. M54.5" value="${escapeHtml(prefill?.icd10 || "")}">
+
+        <label for="icd10b">2. ICD-10 Code (optional)</label>
+        <input id="icd10b" type="text" placeholder="z.B. M54.5" value="${escapeHtml(prefill?.icd10b || "")}">
+
+        ${renderLeitsymptomatikField(prefill?.leitsymptomatik || "")}
+
+        <h3 style="margin-top:20px;">Leistungen</h3>
+        ${renderRezeptItemsEditor(prefill?.heilmittel ? [{ type: prefill.heilmittel, count: prefill.anzahl || "" }] : [])}
+
+        <h3 style="margin-top:20px;">Rezeptprüfung</h3>
         <div class="checkbox-row">
           <label class="check-chip"><input id="bg" type="checkbox"> <span>BG</span></label>
           <label class="check-chip"><input id="dt" type="checkbox"> <span>Doppeltermin</span></label>
           <label class="check-chip"><input id="dringend" type="checkbox"> <span>Dringender Bedarf</span></label>
         </div>
-
-        <label for="icd10">ICD-10 Code</label>
-        <input id="icd10" type="text" placeholder="z.B. M54.5" value="${escapeHtml(prefill?.icd10 || "")}">
-
-        ${renderLeitsymptomatikField("")}
 
         <label for="hausbesuch">Hausbesuch (Rezeptvermerk)</label>
         ${renderJaNeinSelect("hausbesuch", "")}
@@ -3638,9 +3752,6 @@ export function showCreatePatientRezeptView({ onLock, homeId, searchText = "" })
 
         <label for="arztUnterschrift">Arzt-Unterschrift vorhanden</label>
         ${renderJaNeinSelect("arztUnterschrift", "")}
-
-        <h3 style="margin-top:20px;">Leistungen</h3>
-        ${renderRezeptItemsEditor(prefill?.heilmittel ? [{ type: prefill.heilmittel, count: prefill.anzahl || "" }] : [])}
 
         <div id="rezeptPruefungPanel" style="margin-top:16px;"></div>
 
@@ -3662,11 +3773,7 @@ export function showCreatePatientRezeptView({ onLock, homeId, searchText = "" })
     bindRezeptPruefungLive("rezeptPruefungPanel");
 
     const arztInput = document.getElementById("arzt");
-    const arztAdresseInput = document.getElementById("arztAdresse");
-    arztInput.addEventListener("input", () => {
-      const match = arztRegistry.find((a) => a.name === arztInput.value.trim());
-      arztAdresseInput.value = match?.adresse || "";
-    });
+    bindArztAdresseAutofill(arztInput, arztRegistry);
 
     document.getElementById("saveCombinedBtn").onclick = async () => {
       const msg = document.getElementById("combinedMsg");
@@ -3677,7 +3784,6 @@ export function showCreatePatientRezeptView({ onLock, homeId, searchText = "" })
       const lastName = document.getElementById("lastName").value.trim();
       const birthDate = document.getElementById("birthDate").value.trim();
       const hb = document.getElementById("hb").checked;
-      const verstorben = document.getElementById("verstorben").checked;
 
       if (!firstName && !lastName) {
         msg.textContent = "Bitte mindestens einen Namen für den Patienten eingeben.";
@@ -3696,11 +3802,10 @@ export function showCreatePatientRezeptView({ onLock, homeId, searchText = "" })
           lastName,
           birthDate,
           befreit: false,
-          hb,
-          verstorben
+          hb
         });
         createRezept(homeId, newPatientId, rezeptPayload);
-        const arztAdresse = arztAdresseInput.value.trim();
+        const arztAdresse = collectArztAdresseFromForm();
         if (rezeptPayload.arzt && arztAdresse) {
           upsertArztAdresse(rezeptPayload.arzt, arztAdresse);
         }
@@ -3743,7 +3848,7 @@ export function showZuzahlungsabfrageView({ onLock, homeId, patientId, searchTex
   render(`
     <div class="card">
       <h2>Zuzahlungsstatus</h2>
-      <p class="muted">Patient: ${escapeHtml(`${patient.firstName} ${patient.lastName}`.trim() || "—")}</p>
+      <p class="muted">Patient: ${escapeHtml(formatPatientName(patient) || "—")}</p>
     </div>
 
     <div class="card">
@@ -3895,7 +4000,7 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
     render(`
       <div class="card">
         <h2>Assessment</h2>
-        <p class="muted">Patient: ${escapeHtml(`${patient.firstName} ${patient.lastName}`.trim() || "—")}</p>
+        <p class="muted">Patient: ${escapeHtml(formatPatientName(patient) || "—")}</p>
       </div>
 
       <div class="card">
@@ -3931,13 +4036,34 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
   };
   let reviewBackStep = null;
 
-  function wizardCard(title, bodyHtml) {
+  function wizardCard(title, bodyHtml, infoKey = null) {
+    const info = infoKey ? AssessmentInfo.TEST_INFO[infoKey] : null;
     render(`
       <div class="card">
         <h2>Assessment durchführen</h2>
-        <p class="muted">Patient: ${escapeHtml(`${patient.firstName} ${patient.lastName}`.trim() || "—")} · ${escapeHtml(title)}</p>
+        <p class="muted">Patient: ${escapeHtml(formatPatientName(patient) || "—")} · ${escapeHtml(title)}</p>
       </div>
-      <div class="card">${bodyHtml}</div>
+      <div class="card">
+        ${info ? `
+          <details class="accordion" style="margin-bottom:16px;">
+            <summary>
+              <span>ℹ️ ${escapeHtml(info.title)}</span>
+              <span class="muted">Durchführung &amp; Werte</span>
+            </summary>
+            <div class="accordion-body">
+              <h4 style="margin-top:0;">Durchführung</h4>
+              <ul style="margin:0 0 12px; padding-left:20px;">
+                ${info.durchfuehrung.map((point) => `<li>${escapeHtml(point)}</li>`).join("")}
+              </ul>
+              <h4>Werteinterpretation</h4>
+              <ul style="margin:0; padding-left:20px;">
+                ${info.interpretation.map((point) => `<li>${escapeHtml(point)}</li>`).join("")}
+              </ul>
+            </div>
+          </details>
+        ` : ""}
+        ${bodyHtml}
+      </div>
     `);
   }
 
@@ -3995,7 +4121,7 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
         <button id="wizardNext">Weiter</button>
       </div>
       <div id="wizardMsg" class="error"></div>
-    `);
+    `, "barthel");
     bindCheckChipToggles(app);
 
     document.getElementById("wizardBack").onclick = () => stepEbene0();
@@ -4034,7 +4160,7 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
         <button id="wizardNext">Weiter</button>
       </div>
       <div id="wizardMsg" class="error"></div>
-    `);
+    `, isBesd ? "besd" : "nrs");
     bindCheckChipToggles(app);
 
     document.getElementById("wizardBack").onclick = () => stepBarthel();
@@ -4080,7 +4206,7 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
         <button id="wizardNext">Weiter</button>
       </div>
       <div id="wizardMsg" class="error"></div>
-    `);
+    `, "tug");
     bindCheckChipToggles(app);
 
     document.getElementById("tugNichtDurchfuehrbar").addEventListener("change", (e) => {
@@ -4155,7 +4281,7 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
         <button id="wizardNext">Weiter</button>
       </div>
       <div id="wizardMsg" class="error"></div>
-    `);
+    `, "bbs7");
     bindCheckChipToggles(app);
     document.querySelectorAll(".bbs7-nd").forEach((cb) => {
       cb.addEventListener("change", () => {
@@ -4202,7 +4328,7 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
         <button id="wizardNext">Weiter</button>
       </div>
       <div id="wizardMsg" class="error"></div>
-    `);
+    `, "rmi");
     bindCheckChipToggles(app);
 
     document.getElementById("wizardBack").onclick = () => stepBbs7();
@@ -4254,7 +4380,7 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
         <button id="wizardNext">Weiter zur Zusammenfassung</button>
       </div>
       <div id="wizardMsg" class="error"></div>
-    `);
+    `, "mrc");
     bindCheckChipToggles(app);
 
     document.getElementById("wizardBack").onclick = () => stepRmi();
@@ -4307,7 +4433,7 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
         <button id="wizardBack" class="secondary">Zurück</button>
         <button id="wizardNext">Weiter</button>
       </div>
-    `);
+    `, "sppb");
     bindCheckChipToggles(app);
 
     document.getElementById("wizardBack").onclick = () => stepWeichenscreen();
@@ -4395,7 +4521,7 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
         <button id="wizardNext">Weiter zur Zusammenfassung</button>
       </div>
       <div id="wizardMsg" class="error"></div>
-    `);
+    `, "romAktiv");
     bindCheckChipToggles(app);
 
     document.getElementById("wizardBack").onclick = () => stepRomAktivAuswahl();
@@ -4436,7 +4562,7 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
         ${wizard.tug.nichtDurchfuehrbar ? `<button id="wizardBack" class="secondary">Zurück</button>` : `<button id="wizardBack" class="secondary">Zurück</button>`}
         <button id="wizardNext">Weiter</button>
       </div>
-    `);
+    `, "mrc");
     bindCheckChipToggles(app);
 
     document.getElementById("wizardBack").onclick = () => (wizard.tug.nichtDurchfuehrbar ? stepTug() : stepWeichenscreen());
@@ -4470,7 +4596,7 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
         <button id="wizardNext">Weiter</button>
       </div>
       <div id="wizardMsg" class="error"></div>
-    `);
+    `, "kontrakturenDekubitus");
     bindCheckChipToggles(app);
 
     document.getElementById("kontrakturenVorhanden").addEventListener("change", (e) => {
@@ -4534,7 +4660,7 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
         <button id="wizardNext">Weiter zur Zusammenfassung</button>
       </div>
       <div id="wizardMsg" class="error"></div>
-    `);
+    `, "romPassiv");
     bindCheckChipToggles(app);
 
     document.getElementById("wizardBack").onclick = () => stepRomPassivAuswahl();
@@ -4678,7 +4804,7 @@ export function showPatientDetailView({ onLock, homeId, patientId }) {
 
   render(`
     <div class="card">
-      <h2>${escapeHtml(`${patient.firstName} ${patient.lastName}`.trim() || "Patient")}</h2>
+      <h2>${escapeHtml(formatPatientName(patient) || "Patient")}</h2>
       <p class="muted">Heim: ${escapeHtml(home.name || "—")}</p>
       <button id="backHomeDetailBtn" class="secondary">Zurück zum Heim</button>
     </div>
@@ -4777,8 +4903,8 @@ export function showPatientDetailView({ onLock, homeId, patientId }) {
         <span class="muted">anzeigen</span>
       </summary>
       <div class="accordion-body">
-        <p><strong>Vorname:</strong> ${escapeHtml(patient.firstName || "—")}</p>
         <p><strong>Nachname:</strong> ${escapeHtml(patient.lastName || "—")}</p>
+        <p><strong>Vorname:</strong> ${escapeHtml(patient.firstName || "—")}</p>
         <p><strong>Geburtsdatum:</strong> ${escapeHtml(patient.birthDate || "—")}</p>
         <p><strong>Befreit:</strong> ${patient.befreit ? "Ja" : "Nein"}</p>
         <p><strong>Hausbesuch:</strong> ${patient.hb ? "Ja" : "Nein"}</p>
@@ -4801,7 +4927,7 @@ export function showPatientDetailView({ onLock, homeId, patientId }) {
   };
 
   document.getElementById("deletePatientBtn").onclick = async () => {
-    const patientLabel = `${patient.firstName} ${patient.lastName}`.trim() || "Patient";
+    const patientLabel = formatPatientName(patient) || "Patient";
     const ok = confirm(`${patientLabel} wirklich löschen? Alle Rezepte und Dokumentationen dieses Patienten werden ebenfalls gelöscht.`);
     if (!ok) return;
 
@@ -5051,7 +5177,7 @@ export function showRezeptoptimierungView({ onLock, homeId, patientId }) {
   render(`
     <div class="card">
       <h2>Rezeptoptimierung</h2>
-      <p class="muted">Patient: ${escapeHtml(`${patient.firstName} ${patient.lastName}`.trim() || "—")}</p>
+      <p class="muted">Patient: ${escapeHtml(formatPatientName(patient) || "—")}</p>
       <button id="backPatientBtn" class="secondary">Zurück zum Patienten</button>
     </div>
 
@@ -5151,22 +5277,28 @@ export function showCreateRezeptView({ onLock, homeId, patientId, prefill = null
         ${getKnownDoctorNames(getRuntimeData()).map((name) => `<option value="${escapeHtml(name)}"></option>`).join("")}
       </datalist>
 
-      <label for="arztAdresse">Arztadresse</label>
-      <input id="arztAdresse" type="text" placeholder="Straße, PLZ Ort">
+      ${renderArztAdresseFields("")}
 
       <label for="ausstell">Ausstellungsdatum</label>
       <input id="ausstell" type="text" placeholder="TT.MM.JJJJ" inputmode="numeric">
 
+      <label for="icd10">ICD-10 Code</label>
+      <input id="icd10" type="text" placeholder="z.B. M54.5" value="${escapeHtml(prefill?.icd10 || "")}">
+
+      <label for="icd10b">2. ICD-10 Code (optional)</label>
+      <input id="icd10b" type="text" placeholder="z.B. M54.5" value="${escapeHtml(prefill?.icd10b || "")}">
+
+      ${renderLeitsymptomatikField(prefill?.leitsymptomatik || "")}
+
+      <h3 style="margin-top:20px;">Leistungen</h3>
+      ${renderRezeptItemsEditor(prefillItems)}
+
+      <h3 style="margin-top:20px;">Rezeptprüfung</h3>
       <div class="checkbox-row">
         <label class="check-chip"><input id="bg" type="checkbox"> <span>BG</span></label>
         <label class="check-chip"><input id="dt" type="checkbox"> <span>Doppeltermin</span></label>
         <label class="check-chip"><input id="dringend" type="checkbox"> <span>Dringender Bedarf</span></label>
       </div>
-
-      <label for="icd10">ICD-10 Code</label>
-      <input id="icd10" type="text" placeholder="z.B. M54.5" value="${escapeHtml(prefill?.icd10 || "")}">
-
-      ${renderLeitsymptomatikField(prefill?.leitsymptomatik || "")}
 
       <label for="hausbesuch">Hausbesuch</label>
       ${renderJaNeinSelect("hausbesuch", "")}
@@ -5176,9 +5308,6 @@ export function showCreateRezeptView({ onLock, homeId, patientId, prefill = null
 
       <label for="arztUnterschrift">Arzt-Unterschrift vorhanden</label>
       ${renderJaNeinSelect("arztUnterschrift", "")}
-
-      <h3 style="margin-top:20px;">Leistungen</h3>
-      ${renderRezeptItemsEditor(prefillItems)}
 
       <div id="rezeptPruefungPanel" style="margin-top:16px;"></div>
 
@@ -5201,12 +5330,8 @@ export function showCreateRezeptView({ onLock, homeId, patientId, prefill = null
   bindRezeptPruefungLive("rezeptPruefungPanel");
 
   const arztInput = document.getElementById("arzt");
-  const arztAdresseInput = document.getElementById("arztAdresse");
   const arztRegistry = getArztRegistry(getRuntimeData());
-  arztInput.addEventListener("input", () => {
-    const match = arztRegistry.find((a) => a.name === arztInput.value.trim());
-    arztAdresseInput.value = match?.adresse || "";
-  });
+  bindArztAdresseAutofill(arztInput, arztRegistry);
 
   document.getElementById("saveRezeptBtn").onclick = async () => {
     const msg = document.getElementById("rezeptMsg");
@@ -5222,7 +5347,7 @@ export function showCreateRezeptView({ onLock, homeId, patientId, prefill = null
 
     try {
       createRezept(homeId, patientId, payload);
-      const arztAdresse = arztAdresseInput.value.trim();
+      const arztAdresse = collectArztAdresseFromForm();
       if (payload.arzt && arztAdresse) {
         upsertArztAdresse(payload.arzt, arztAdresse);
       }
@@ -5267,22 +5392,28 @@ export function showEditRezeptView({ onLock, homeId, patientId, rezeptId }) {
         ${getKnownDoctorNames(getRuntimeData()).map((name) => `<option value="${escapeHtml(name)}"></option>`).join("")}
       </datalist>
 
-      <label for="arztAdresse">Arztadresse</label>
-      <input id="arztAdresse" type="text" placeholder="Straße, PLZ Ort" value="${escapeHtml(currentArztAdresse)}">
+      ${renderArztAdresseFields(currentArztAdresse)}
 
       <label for="ausstell">Ausstellungsdatum</label>
       <input id="ausstell" type="text" inputmode="numeric" value="${escapeHtml(rezept.ausstell || "")}">
 
+      <label for="icd10">ICD-10 Code</label>
+      <input id="icd10" type="text" placeholder="z.B. M54.5" value="${escapeHtml(rezept.icd10 || "")}">
+
+      <label for="icd10b">2. ICD-10 Code (optional)</label>
+      <input id="icd10b" type="text" placeholder="z.B. M54.5" value="${escapeHtml(rezept.icd10b || "")}">
+
+      ${renderLeitsymptomatikField(rezept.leitsymptomatik || "")}
+
+      <h3 style="margin-top:20px;">Leistungen</h3>
+      ${renderRezeptItemsEditor(items)}
+
+      <h3 style="margin-top:20px;">Rezeptprüfung</h3>
       <div class="checkbox-row">
         <label class="check-chip"><input id="bg" type="checkbox" ${rezept.bg ? "checked" : ""}> <span>BG</span></label>
         <label class="check-chip"><input id="dt" type="checkbox" ${rezept.dt ? "checked" : ""}> <span>Doppeltermin</span></label>
         <label class="check-chip"><input id="dringend" type="checkbox" ${rezept.dringend ? "checked" : ""}> <span>Dringender Bedarf</span></label>
       </div>
-
-      <label for="icd10">ICD-10 Code</label>
-      <input id="icd10" type="text" placeholder="z.B. M54.5" value="${escapeHtml(rezept.icd10 || "")}">
-
-      ${renderLeitsymptomatikField(rezept.leitsymptomatik || "")}
 
       <label for="hausbesuch">Hausbesuch</label>
       ${renderJaNeinSelect("hausbesuch", rezept.hausbesuch || "")}
@@ -5292,9 +5423,6 @@ export function showEditRezeptView({ onLock, homeId, patientId, rezeptId }) {
 
       <label for="arztUnterschrift">Arzt-Unterschrift vorhanden</label>
       ${renderJaNeinSelect("arztUnterschrift", rezept.arztUnterschrift || "")}
-
-      <h3 style="margin-top:20px;">Leistungen</h3>
-      ${renderRezeptItemsEditor(items)}
 
       <div id="rezeptPruefungPanel" style="margin-top:16px;"></div>
 
@@ -5318,11 +5446,7 @@ export function showEditRezeptView({ onLock, homeId, patientId, rezeptId }) {
   bindRezeptPruefungLive("rezeptPruefungPanel");
 
   const arztInputEdit = document.getElementById("arzt");
-  const arztAdresseInputEdit = document.getElementById("arztAdresse");
-  arztInputEdit.addEventListener("input", () => {
-    const match = arztRegistryForEdit.find((a) => a.name === arztInputEdit.value.trim());
-    arztAdresseInputEdit.value = match?.adresse || "";
-  });
+  bindArztAdresseAutofill(arztInputEdit, arztRegistryForEdit);
 
   document.getElementById("updateRezeptBtn").onclick = async () => {
     const msg = document.getElementById("rezeptMsg");
@@ -5345,7 +5469,7 @@ export function showEditRezeptView({ onLock, homeId, patientId, rezeptId }) {
         ...payload,
         items: nextItems
       });
-      const arztAdresse = arztAdresseInputEdit.value.trim();
+      const arztAdresse = collectArztAdresseFromForm();
       if (payload.arzt && arztAdresse) {
         upsertArztAdresse(payload.arzt, arztAdresse);
       }
@@ -5397,7 +5521,7 @@ export function showRezeptDetailView({ onLock, homeId, patientId, rezeptId }) {
   render(`
     <div class="card">
       <h2>Rezept</h2>
-      <p><strong>Patient:</strong> ${escapeHtml(`${patient.firstName} ${patient.lastName}`.trim() || "—")}</p>
+      <p><strong>Patient:</strong> ${escapeHtml(formatPatientName(patient) || "—")}</p>
       <button id="backPatientBtn" class="secondary">Zurück zum Patienten</button>
     </div>
 
@@ -5416,6 +5540,7 @@ export function showRezeptDetailView({ onLock, homeId, patientId, rezeptId }) {
         <p><strong>Arzt:</strong> ${escapeHtml(rezept.arzt || "—")}</p>
         <p><strong>Ausstellungsdatum:</strong> ${escapeHtml(rezept.ausstell || "—")}</p>
         <p><strong>ICD-10 Code:</strong> ${escapeHtml(rezept.icd10 || "—")}</p>
+        ${rezept.icd10b ? `<p><strong>2. ICD-10 Code:</strong> ${escapeHtml(rezept.icd10b)}</p>` : ""}
         <p><strong>Leitsymptomatik:</strong> ${escapeHtml(rezept.leitsymptomatik || "—")}</p>
         <p><strong>Hausbesuch:</strong> ${rezept.hausbesuch === "ja" ? "Ja" : rezept.hausbesuch === "nein" ? "Nein" : "—"}</p>
         <p><strong>Arzt-Stempel vorhanden:</strong> ${rezept.arztStempel === "ja" ? "Ja" : rezept.arztStempel === "nein" ? "Nein" : "—"}</p>
@@ -6713,9 +6838,16 @@ function buildAbwesenheitMailtoLink({ email, therapistName, type, from, to }) {
   const artLabel = type === "krank" ? "Krank" : "Urlaub";
   const subject = `Abwesenheitsmeldung – ${therapistName || "FaSt"}`;
   const body = [
-    `Name des Therapeuten: ${therapistName || "—"}`,
-    `Art der Abwesenheit: ${artLabel}`,
-    `Zeitraum: von ${from} bis ${to}`
+    "Guten Tag,",
+    "",
+    "hiermit informiere ich über folgende Abwesenheit:",
+    "",
+    `Therapeut:  ${therapistName || "—"}`,
+    `Art:        ${artLabel}`,
+    `Zeitraum:   ${from} bis ${to}`,
+    "",
+    "Mit freundlichen Grüßen",
+    therapistName || "—"
   ].join("\n");
   return `mailto:${email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
@@ -6753,12 +6885,9 @@ export function showAbwesenheitView({ onLock }) {
         ${homes.length === 0 ? `<p class="muted">Keine Einrichtungen vorhanden.</p>` : `
           <div class="list-stack">
             ${homes.map((home) => `
-              <label class="check-chip" style="justify-content:flex-start; align-items:flex-start; padding:14px 12px;">
-                <input type="checkbox" class="abwesenheitHomeCheck" value="${escapeHtml(home.homeId)}" style="margin-top:3px;">
-                <span>
-                  <div style="font-weight:700;">${escapeHtml(home.name || "Ohne Name")}</div>
-                  ${!home.verwaltungsEmail ? '<div class="compact-meta">keine E-Mail hinterlegt</div>' : ''}
-                </span>
+              <label class="check-chip" style="justify-content:flex-start;">
+                <input type="checkbox" class="abwesenheitHomeCheck" value="${escapeHtml(home.homeId)}">
+                <span>${escapeHtml(home.name || "Ohne Name")}${!home.verwaltungsEmail ? ' <span class="muted" style="font-weight:400;">(keine E-Mail hinterlegt)</span>' : ''}</span>
               </label>
             `).join("")}
           </div>

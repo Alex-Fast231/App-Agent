@@ -1,7 +1,7 @@
 import { generateId } from "../core/utils.js";
 
 export const APP_SCHEMA_VERSION = 3;
-export const APP_VERSION = "3.9.0";
+export const APP_VERSION = "3.9.9";
 export const APP_MODULE = "doku";
 
 export const PRACTICE_ADDRESS = ``;
@@ -26,7 +26,6 @@ export function createEmptyAppData() {
       weeklyHours: "",
       fastStartDatum: "",
       stundenStartsaldoMinuten: 0,
-      privacyMode: "full",
       zertifikate: {
         kgzns: false,
         mt: false,
@@ -37,11 +36,6 @@ export function createEmptyAppData() {
         email: ""
       },
       assessmentIntervalMonths: 3,
-      autoExport: {
-        emailjsServiceId: "",
-        emailjsTemplateId: "",
-        emailjsPublicKey: ""
-      },
       createdAt: now,
       updatedAt: now
     },
@@ -84,8 +78,7 @@ export function createEmptyAppData() {
 
     security: {
       log: [],
-      lastSecurityChangeAt: "",
-      privacyMode: "full"
+      lastSecurityChangeAt: ""
     },
 
     ui: {

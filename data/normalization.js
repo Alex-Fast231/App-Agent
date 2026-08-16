@@ -119,6 +119,7 @@ return {
   dt: ensureBoolean(source.dt, false),
   dringend: ensureBoolean(source.dringend, false),
   icd10: ensureString(source.icd10),
+  icd10b: ensureString(source.icd10b),
   leitsymptomatik: ensureString(source.leitsymptomatik),
   hausbesuch: ensureJaNein(source.hausbesuch),
   arztStempel: ensureJaNein(source.arztStempel),
@@ -623,7 +624,6 @@ export function finalizeAppStructure(data) {
       weeklyHours: ensureWeeklyHours(settings.weeklyHours),
       fastStartDatum: ensureString(settings.fastStartDatum),
       stundenStartsaldoMinuten: ensureIntegerNumber(settings.stundenStartsaldoMinuten, 0),
-      privacyMode: ["full", "privacy"].includes(settings.privacyMode) ? settings.privacyMode : "full",
       zertifikate: {
         kgzns: ensureBoolean(settings.zertifikate?.kgzns, false),
         mt: ensureBoolean(settings.zertifikate?.mt, false),
@@ -634,11 +634,6 @@ export function finalizeAppStructure(data) {
         email: ensureString(settings.buero?.email)
       },
       assessmentIntervalMonths: [3, 6].includes(Number(settings.assessmentIntervalMonths)) ? Number(settings.assessmentIntervalMonths) : 3,
-      autoExport: {
-        emailjsServiceId: ensureString(settings.autoExport?.emailjsServiceId),
-        emailjsTemplateId: ensureString(settings.autoExport?.emailjsTemplateId),
-        emailjsPublicKey: ensureString(settings.autoExport?.emailjsPublicKey)
-      },
       createdAt: ensureIsoString(settings.createdAt, now),
       updatedAt: ensureIsoString(settings.updatedAt, now) || now
     },
@@ -673,10 +668,7 @@ export function finalizeAppStructure(data) {
 
     security: {
       log: ensureArray(source.security?.log),
-      lastSecurityChangeAt: ensureIsoString(source.security?.lastSecurityChangeAt),
-      privacyMode: ["full", "privacy"].includes(source.security?.privacyMode)
-        ? source.security.privacyMode
-        : (["full", "privacy"].includes(settings.privacyMode) ? settings.privacyMode : "full")
+      lastSecurityChangeAt: ensureIsoString(source.security?.lastSecurityChangeAt)
     },
 
     ui: {

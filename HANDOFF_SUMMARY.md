@@ -1,88 +1,115 @@
 # FaSt App – Handoff Summary
-**Stand:** 2026-08-15 (Session-Ende)
-**Branch:** `claude/fast-app-8-features-xep6yr` (in `/workspace/app-test`, lokal, **24 Commits, weiterhin nicht auf GitHub gepusht**)
+**Stand:** 2026-08-16 (Session-Ende, zweite Session am selben Tag)
+**Branch:** `claude/fast-app-8-features-xep6yr` (in `/workspace/app-test`, lokal, **35 Commits, weiterhin nicht auf GitHub gepusht**)
 
-Diese Datei ersetzt die vorherige Version vom 2026-08-14 vollständig.
+Diese Datei ersetzt die vorherige Version vom 2026-08-16 (erste Session) vollständig.
 
 ---
 
-## 1. Was in dieser Session gemacht wurde
+## 1. Diese Session: Aufgaben 6-10
 
-Der Nutzer gab 3 konkrete Aufgaben vor (siehe Originaltext unten in Abschnitt 5). **Alle 3 sind abgeschlossen, committet und mit Playwright-Browsertests abgesichert.**
+Der Nutzer gab 5 weitere Aufgaben vor (Fortsetzung der Liste aus der vorherigen Session dieses Tages). **Aufgabe 6 wurde auf ausdrücklichen Nutzerwunsch übersprungen** ("lass das mit dem FaSt-Button weg, ignoriere das" – der gemeinte Button/Einstiegspunkt konnte im Dashboard nicht eindeutig identifiziert werden, siehe Abschnitt 6). **Aufgaben 7-10 sind abgeschlossen**, committet und mit Playwright-Browsertests abgesichert.
 
 Commits dieser Session (neueste zuerst):
 ```
-7128c7d Aufgabe 3: Patient + Rezept zusammenführen mit OCR (Tesseract.js)
-23caa97 Aufgabe 2: Export-Intervall testweise täglich + eigenes Export-Passwort
-1ea3d5f Aufgabe 1: Abgabeliste-Hervorhebung nur im PDF statt in der App
+c5f629c Aufgabe 10: Toten Code aus dem Code-Audit entfernt
+75dea3e Aufgabe 9: OCR/Rezept-Formular an GKV Muster 13 angepasst
+deedae5 Aufgabe 8: Rezept-Formular erweitert (2. ICD-10, Mehrfachauswahl, Adresse, Rezeptprüfung-Überschrift)
+3427b2b Aufgabe 7: Namensreihenfolge Nachname-Vorname vereinheitlicht
 ```
-(Davor: 21 Commits aus vorherigen Sessions – Funktionen 1-8, Assessment-System, 12 Fix-Blöcke aus FaSt_ClaudeCode_Fixes.md. Siehe `git log` bzw. vorherige Handoff-Version im Git-Verlauf.)
+(Davor: 31 Commits aus vorherigen Sessions, u.a. die 3 Audits + Aufgaben 1-5 der ersten Session desselben Tages. Siehe vorherige Handoff-Version im Git-Verlauf für deren Details.)
 
-### Aufgabe 1: Abgabeliste-Hervorhebung nur im PDF
+### Aufgabe 6: Übersprungen
 
-Die Outline-Hervorhebung (Befreit=orange, Doppeltermin=blau) aus der letzten Session wurde aus der **App-Auswahlansicht entfernt** und stattdessen als **Rahmen in der PDF-Abgabeliste** eingebaut (`renderAbgabeSheetHtml` in `ui/views.js`). In der App sehen die Karten jetzt wieder normal aus, im gedruckten/exportierten PDF ist die Hervorhebung weiterhin sichtbar.
+Der Nutzer bat um Entfernung eines "FaSt"-Buttons/Einstiegs im Dashboard. Weder ein Button mit diesem Namen noch ein eindeutig zuordenbares Element wurde im Dashboard-Code gefunden (geprüft: Dashboard-Header, "Bereiche"-Kartengrid, Branding-Schriftzug im Header, PWA-Manifest). Auf Nachfrage antwortete der Nutzer: "lass das mit dem FaSt-Button weg, ignoriere das." **Keine Änderung vorgenommen.**
 
-### Aufgabe 2: Export-Intervall testweise täglich + eigenes Export-Passwort
+### Aufgabe 7: Namensreihenfolge Nachname-Vorname überall
 
-- `AUTO_EXPORT_INTERVAL_DAYS` in `modules/autoExport.js` **temporär von 28 auf 1 Tag** gesetzt (klar kommentiert, **muss nach dem Test wieder auf 28 zurückgesetzt werden**).
-- `exportBackup()` in `modules/backup.js` akzeptiert jetzt ein optionales `overridePassword`. Der **manuelle** Export (Einstellungen → Backup) verhält sich unverändert und verschlüsselt weiter mit dem Praxispasswort. Der **automatische** Export verschlüsselt jetzt mit einem eigenen, vom Praxispasswort komplett getrennten Testpasswort:
-  ```
-  AUTO_EXPORT_TEST_PASSWORD = "FaSt-AutoExport-Test-2026!"
-  ```
-  (Konstante in `modules/autoExport.js`.) Damit bleibt eine abgefangene Export-Mail auch ohne Kenntnis des echten Praxispassworts unlesbar. **Wird in einer späteren Session durch ein vom Nutzer im Viewer festlegbares Passwort ersetzt** (siehe Hinweis des Nutzers zum geplanten Viewer, Abschnitt 5).
-- Mit Playwright end-to-end verifiziert: Export wird beim Login automatisch ausgelöst (EmailJS-Request abgefangen und geprüft), die angehängte ZIP lässt sich **nicht** mit dem Praxispasswort, aber **mit** dem neuen Testpasswort entschlüsseln.
+- Neue gemeinsame Hilfsfunktion `formatPatientName(patient)` in `core/utils.js` (Format "Nachname, Vorname", robust gegen fehlende Werte).
+- Ersetzt mehrere bisher **inkonsistente** Verkettungen in `ui/views.js` und `modules/homes.js`, die teils "Vorname Nachname", teils "Nachname, Vorname" anzeigten (u.a. Arztbericht-PDF-Kopf, Patientendetail-Überschrift, Rezept-Detailseite, Kilometer-Hausbesuch-Label, mehrere `wizardCard`-Patientenzeilen im Assessment-Wizard).
+- Eingabeformular-Reihenfolge (Label "Nachname" vor "Vorname") im kombinierten Anlage-Formular sowie in der Stammdaten-Anzeige angepasst. Die Stammdaten-**Bearbeitung** hatte die Reihenfolge bereits korrekt.
+- Sortierfunktionen (`sortPatientsAlpha`) und der eigenständige Offline-Viewer (`viewer/index.html`) hatten die Reihenfolge bereits korrekt – keine Änderung nötig.
 
-### Aufgabe 3: Patient + Rezept zusammenführen mit OCR (Tesseract.js)
+### Aufgabe 8: Rezept-Formular erweitert
 
-- **Neuer kombinierter Flow** (`showCreatePatientRezeptView` in `ui/views.js`): Einrichtung → Button "Neuen Patienten + Rezept anlegen" → Eingabemodus wählen ("Manuell eingeben" oder "📷 Rezept abfotografieren") → gemeinsames Formular für Patient- und Rezeptdaten → Speichern legt Patient **und** Rezept in einem Schritt an, danach geht es wie bisher weiter zur Zuzahlungsabfrage → Assessment-Frage.
-- Die alte separate "Suche und Patient anlegen"-Form in `showHomeDetailView` wurde durch diesen Button ersetzt (Suche selbst blieb erhalten, ist jetzt ein eigenes kleines Accordion). "Neues Rezept anlegen" für ein **weiteres** Rezept zu einem bereits bestehenden Patienten (in der Patientendetailansicht) ist **unverändert** und bleibt bestehen.
-- **OCR-Option**: Kamera öffnen (`getUserMedia`, Rückkamera bevorzugt) → Foto per `<canvas>` aufnehmen → Kamera-Stream wird **sofort** gestoppt → Tesseract.js erkennt den Text lokal im Browser → `modules/ocr.js` (`parseRezeptOcrText`, reine Textverarbeitung, unabhängig von Kamera/OCR-Engine testbar) extrahiert Bestwert-Vorschläge für Patientenname, Geburtsdatum, Arzt, Ausstellungsdatum, ICD-10, Heilmittel, Anzahl → das kombinierte Formular wird damit vorausgefüllt, Therapeut prüft/korrigiert → Canvas-Bilddaten werden direkt nach der Erkennung geleert. **Das Foto verlässt zu keinem Zeitpunkt das Gerät.**
-- Tesseract.js (API + Worker + WASM-Core, ~6,7 MB) wurde lokal vendort unter `vendor/tesseract/` (analog zu `zip-full.min.js`) und wird nur bei tatsächlicher Nutzung der Kamera-Option nachgeladen, nicht bei jedem App-Start. Nur die **deutschen Sprachdaten** (`deu.traineddata`, mehrere MB) kommen weiterhin aus Tesseract.js' eigenem Standard-CDN (jsdelivr) – diese sind zu groß, um sinnvoll vendort zu werden, und werden vom Browser nach dem ersten Gebrauch gecacht.
-- **Wichtig für die nächste Session:** In der Sandbox-Testumgebung ist der Zugriff auf die jsdelivr-CDN für die Sprachdaten blockiert (Netzwerk-Policy des Containers), daher konnte die **tatsächliche Texterkennungsqualität nicht live getestet werden**. Verifiziert wurde aber eindeutig per Netzwerk-Trace: die lokal vendorten Dateien (`tesseract.min.js`, `worker.min.js`, `tesseract-core-simd-lstm.wasm.js`) laden korrekt, nur der externe Sprachdaten-Abruf schlägt in der Sandbox fehl (`net::ERR_TUNNEL_CONNECTION_FAILED`). Im echten Browser des Therapeuten mit normalem Internetzugriff sollte das funktionieren, **muss aber einmal real mit einem echten Foto getestet werden** (Kamera + Erkennungsqualität).
-- **Robustheits-Fix:** Ein 30-Sekunden-Timeout um die gesamte OCR-Pipeline verhindert, dass die UI bei einem Erkennungsfehler (kein Netz, langsames Netz o.ä.) dauerhaft bei "Text wird erkannt ..." hängen bleibt – sie fällt zuverlässig auf eine Fehlermeldung mit Hinweis "Bitte manuell eingeben" zurück. Dieser Fix war nötig, weil das zugrunde liegende Tesseract.js-Worker-Fehlerhandling bei einem Netzwerkfehler nicht sauber als Promise-Rejection propagiert (unhandled error im Worker-Kontext) – ohne den eigenen Timeout hätte die UI sonst unbegrenzt gehangen.
-- Alle bestehenden Playwright-Regressionstests (10 Suiten, 58 Prüfungen) wurden an den neuen kombinierten Anlage-Flow angepasst (jede Patientenanlage braucht jetzt auch Rezeptfelder) und laufen grün.
+In allen 3 Rezept-Formularen (Neuen Patienten + Rezept anlegen, Neues Rezept, Rezept bearbeiten):
+- **Zweiter ICD-10-Code** (`icd10b`, optional) – auf dem echten GKV-Rezept steht ein oder zwei Diagnosecodes.
+- **Leitsymptomatik als Mehrfachauswahl** (Checkboxen statt Radiogruppe) – intern weiterhin als ein mit `"; "` verbundener String gespeichert, damit Rezeptprüfung/Anzeige/Export unverändert funktionieren.
+- **Arztadresse getrennt nach Straße/PLZ/Ort** erfasst und angezeigt (vorher ein einzelnes Freitextfeld) – im Arzt-Register (`data.aerzte`) weiterhin als ein zusammengesetzter String gespeichert, damit die Freikuvert-Bestellung unverändert funktioniert.
+- **Eigene Überschrift "Rezeptprüfung"** vor Hausbesuch/Arzt-Stempel/Arzt-Unterschrift, um klarzumachen, dass dieser Abschnitt eine Prüfung des Rezepts ist.
+- Neue gemeinsame Helfer in `ui/views.js`: `renderArztAdresseFields`, `bindArztAdresseAutofill`, `collectArztAdresseFromForm`, `splitArztAdresse`/`joinArztAdresse` – ersetzen die vorher dreifach duplizierte Adress-Autofill-Logik.
+- `data/normalization.js` und `modules/homes.js` (`createRezept`/`updateRezept`) um `icd10b` ergänzt.
+
+### Aufgabe 9: OCR/Rezept-Ansicht an GKV Muster 13 angepasst
+
+**Wichtiger Hinweis/Korrektur:** Der Nutzer hatte "Muster 16" angegeben. Das ist das Formular für **Arzneiverordnungen** (Medikamente). Das für **Heilmittelverordnungen** (Physiotherapie, Ergotherapie, Logopädie – also genau das, was diese App dokumentiert) gültige GKV-Formular ist **Muster 13** (einheitliches Verordnungsmuster seit 01.01.2021). Recherchiert per Websuche (Quellen: physio-deutschland.de, optica.de, aok.de/gp) und anhand des in der App bereits vorhandenen Feldsatzes (ICD-10, Leitsymptomatik, Heilmittel-Katalog, Hausbesuch, Arzt-Stempel/Unterschrift, Dringlicher Bedarf) abgeglichen – passt eindeutig zu Muster 13, nicht zu Muster 16. Die Umsetzung erfolgte entsprechend korrigiert auf Muster 13.
+
+- `modules/ocr.js`: erkennt jetzt bis zu **zwei ICD-10-Codes** (Haupt-/Nebendiagnose, siehe Aufgabe 8) sowie einen **Leitsymptomatik-Freitext** anhand des auf Muster 13 verwendeten Feld-Labels "Leitsymptomatik". Eine automatische Erkennung von Ankreuzfeldern (z.B. Hausbesuch) wurde **bewusst nicht** umgesetzt – aus reinem OCR-Text ist ein angekreuztes Kästchen nicht zuverlässig erkennbar, und eine Fehlerkennung bei einem für die Abrechnung relevanten Feld wäre riskanter als eine leere, vom Therapeuten manuell zu bestätigende Angabe.
+- Feldreihenfolge in allen 3 Rezept-Formularen an den tatsächlichen Muster-13-Ablauf angeglichen: Arzt/Adresse/Ausstellungsdatum → Diagnose(n) inkl. Leitsymptomatik → Heilmittel/Leistungen → Ankreuzfelder (BG/Doppeltermin/Dringend) + Rezeptprüfung (Hausbesuch/Stempel/Unterschrift). Vorher standen die Ankreuzfelder vor der Diagnose und die Leistungen ganz am Ende – umgekehrt zur Reihenfolge auf dem echten Formular.
+- OCR-Vorschläge für 2. ICD-10 und Leitsymptomatik werden jetzt auch im kombinierten Anlage-Formular ins Formular übernommen (vorher wurden diese beiden erkannten Werte beim Foto-Import verworfen und nicht angezeigt).
+- Per Unit-Test (`test_ocr_muster13_aufgabe9.mjs`, gegen einen simulierten Muster-13-artigen Rohtext) verifiziert, unabhängig von der OCR-Engine selbst testbar (siehe `modules/ocr.js`-Designprinzip aus einer früheren Session).
+
+### Aufgabe 10: Code bereinigen (basierend auf Code-Audit)
+
+Basierend auf dem Code-Audit der ersten Session dieses Tages entfernt, jeweils bestätigt **komplett unreferenziert** (kein Import, kein Aufruf):
+- `getPendingKilometerContext`, `updateHomeVerwaltungsEmail`, `saveNachbestellHistory` (`modules/homes.js`) – `saveNachbestellHistory` war bereits durch `saveNachbestellHistorySnapshot` ersetzt worden.
+- `privacyMode`-Feature-Flag (`data/schema.js`, `data/normalization.js`, `security/security-log.js`) – wurde geschrieben, aber nirgends gelesen/ausgewertet.
+
+**Bewusst NICHT entfernt:** `updateHomeAddress`, `deleteDiagnoseZuordnung`, `createRezeptTimeEntry` (alle drei weiterhin importiert in `ui/views.js`, aber ohne Aufrufstelle). Das deutet eher auf eine unvollständig verdrahtete UI hin (fehlender "Heim-Adresse bearbeiten"-Button, fehlender "Zuordnung löschen"-Button bei den Rezeptoptimierer-Vorschlägen, fehlender Weg zum manuellen Anlegen von "Besprechungszeit"-Einträgen) als auf echten Alt-Code – Löschen hätte eine möglicherweise noch gewünschte Funktion vorschnell verworfen statt nur aufgeräumt. **Empfehlung:** mit dem Nutzer klären, ob diese 3 Lücken als eigene kleine Aufgaben in einer künftigen Session geschlossen werden sollen, oder ob die Funktionen doch entfernt werden dürfen.
+
+Nicht angefasst (bewusst außerhalb des Aufgaben-Scopes "tote Pfade/nicht verwendeten Code entfernen"): der bereits dokumentierte Fehlerschlucker bei `worker.terminate().catch(() => {})` (ein Bug, keine Dead-Code-Frage) und die drei duplizierten Datumsformatierungs-Funktionen (`formatDeDate`/`formatCurrentDateShort`/`formatIsoDateShort` – alle drei sind aktiv genutzt, eine Konsolidierung wäre ein Refactoring mit Regressionsrisiko, kein Dead-Code-Fund).
 
 ---
 
 ## 2. Testprotokoll dieser Session
 
-11 Playwright-Testläufe gegen `python3 -m http.server 8420` in `/workspace/app-test`:
+Playwright-Testläufe gegen `python3 -m http.server 8420` in `/workspace/app-test` (Chromium headless), nach jeder Aufgabe erneut ausgeführt:
 
-| Testskript | Prüfungen | Hinweis |
+| Testskript | Ergebnis | Hinweis |
 |---|---|---|
-| `smoketest_dashboard_assessment.mjs` | 13/13 | angepasst an neuen Anlage-Flow |
-| `smoketest_rezept_block3.mjs` | 8/8 | angepasst |
-| `smoketest_optimierer_block4.mjs` | 4/4 | angepasst |
-| `smoketest_zeit_block6.mjs` | 4/4 | angepasst |
-| `smoketest_abwesenheit_block8.mjs` | 4/4 | unverändert (kein Patientenanlage) |
-| `smoketest_abgabe_task1.mjs` | 2/2 | neu für Aufgabe 1 |
-| `smoketest_freikuvert_block10.mjs` | 4/4 | angepasst |
-| `smoketest_faq_block11.mjs` | 3/3 | unverändert |
-| `smoketest_therapiebericht_block12.mjs` | 6/6 | angepasst |
-| `smoketest_neuro.mjs` | 10/10 | angepasst (Regressionstest für Assessment-Wizard) |
-| `smoketest_autoexport_task2.mjs` | 7/7 | neu für Aufgabe 2 |
-| `smoketest_ocr_task3.mjs` | 6/6 | neu für Aufgabe 3 (inkl. Chromium-Fake-Kamera) |
+| `smoketest_rezept_block3.mjs` | 10/10 | erweitert um Aufgabe-8/9-Prüfungen (2. ICD-10, Mehrfachauswahl, Straße/PLZ/Ort, Rezeptprüfung-Überschrift) |
+| `smoketest_freikuvert_block10.mjs` | 4/4 | angepasst an neue Arztadresse-Feldstruktur |
+| `smoketest_ocr_task3.mjs` | 6/6 | unverändert grün (OCR-Sprachdaten-CDN in Sandbox weiterhin blockiert, erwartbar) |
+| `test_ocr_muster13_aufgabe9.mjs` | 11/11 | **neu** – Unit-Test der OCR-Textverarbeitung (icd10b/Leitsymptomatik-Erkennung), ohne Browser/Kamera |
+| `smoketest_optimierer_block4.mjs` | 4/4 | unverändert grün |
+| `smoketest_zeit_block6.mjs` | 4/4 | unverändert grün |
+| `smoketest_verstorben_aufgabe4.mjs` | 4/4 | unverändert grün |
+| `smoketest_dashboard_assessment.mjs` | 13/13 | unverändert grün |
+| `smoketest_neuro.mjs` | 10/10 | unverändert grün |
+| `smoketest_krankmeldung_aufgabe1.mjs` | 4/4 | unverändert grün |
+| `smoketest_version_aufgabe23.mjs` | 3/3 | unverändert grün, Version jetzt 3.9.8 |
+| `smoketest_assessment_info_aufgabe5.mjs` | 5/5 | unverändert grün |
+| `smoketest_abgabe_task1.mjs` | 2/2 | unverändert grün |
+| `smoketest_therapiebericht_block12.mjs` | 6/6 | unverändert grün |
 
-Insgesamt 71/71 Prüfungen erfolgreich, keine unerwarteten Console-/Page-Errors. Alle Testskripte liegen unter `/tmp/claude-0/-home-user/a9e9d6a0-2415-56f0-be21-0759b91d7c6a/scratchpad/` (container-lokal, geht mit Container-Reset verloren).
+Insgesamt alle gelaufenen Suiten grün, keine Console-/Page-Errors außer dem erwarteten, dokumentierten Sandbox-Netzwerkfehler beim OCR-Sprachdaten-CDN (siehe vorherige Session). `node --check` erfolgreich für alle geänderten Dateien nach jeder Aufgabe.
+
+`smoketest_assessment.mjs` und `test_checkchip_radio_bug.mjs` (beide aus sehr frühen Sessions) sind weiterhin veraltet – sie referenzieren die längst ersetzte alte "Suche und Patient anlegen"-Form bzw. (bei letzterem) das inzwischen auf Checkboxen umgestellte Leitsymptomatik-Feld. Beide wurden diese Session nicht ausgeführt/aktualisiert (kein durch diese Session verursachter Regressionsfehler, reine Skript-Alterung).
+
+Alle Testskripte liegen unter `/tmp/claude-0/-home-user/a9e9d6a0-2415-56f0-be21-0759b91d7c6a/scratchpad/` (container-lokal, geht mit Container-Reset verloren).
 
 ---
 
 ## 3. Was noch aussteht
 
-1. **GitHub-Push weiterhin blockiert (403).** Unverändert seit mehreren Sessions – weder `git push` noch die GitHub-App/MCP-Tools funktionieren aus der Session heraus (`403 Resource not accessible by integration`). Alle 24 Commits liegen lokal bereit:
+1. **GitHub-Push weiterhin blockiert (403).** Unverändert seit vielen Sessions, diese Session per `git push` erneut bestätigt (die GitHub-API-Variante wurde bereits in der vorherigen Session getestet und ebenfalls mit 403 abgelehnt – siehe dortige Handoff-Version). Alle 35 Commits liegen lokal bereit:
    ```
    cd /workspace/app-test
    git push -u origin claude/fast-app-8-features-xep6yr
    ```
    **Übergangslösung:** Ein ZIP mit allen in dieser Session geänderten/neuen Dateien wurde dem Nutzer direkt zum manuellen Hochladen bereitgestellt.
 
-2. **OCR-Texterkennung muss real getestet werden.** Siehe Abschnitt 1, Aufgabe 3 – die Sandbox konnte die Sprachdaten-CDN nicht erreichen. Sobald die App live ist, bitte mit einem echten Rezeptfoto testen: Kamera öffnet sich, Texterkennung liefert brauchbare Vorschläge, Formular lässt sich korrigieren und speichern.
+2. **Aufgabe 6 weiterhin offen.** Der Nutzer bat darum, das Thema zu ignorieren – falls der "FaSt"-Button/Einstieg doch noch entfernt werden soll, bitte in der nächsten Session mit Screenshot oder genauerer Beschreibung (welcher Bildschirmbereich, welcher Text auf dem Button) präzisieren.
 
-3. **Export-Intervall zurücksetzen.** `AUTO_EXPORT_INTERVAL_DAYS` in `modules/autoExport.js` steht aktuell auf `1` (täglich, nur zum Testen). **Nach erfolgreichem Test unbedingt auf `28` zurücksetzen** (eine Zeile, klar kommentiert).
+3. **3 offene Code-Lücken aus Aufgabe 10** (siehe dortiger Abschnitt): `updateHomeAddress` (Heim-Adresse bearbeiten), `deleteDiagnoseZuordnung` (Rezeptoptimierer-Vorschlag löschen), `createRezeptTimeEntry` (Besprechungszeit manuell anlegen) – Funktionen existieren in `modules/homes.js`, sind aber über keinen UI-Weg erreichbar. Mit dem Nutzer klären: fertigstellen (UI-Anbindung ergänzen) oder endgültig entfernen.
 
-4. **Viewer-Session (separates Projekt).** Laut Nutzer folgt nach erfolgreichem Test des täglichen Exports eine **separate Session** für einen lokalen PC-Viewer (einzelne HTML-Datei, öffnet die verschlüsselte Export-ZIP, Passwort wird beim ersten Öffnen im Viewer festgelegt und muss dann auch die Export-ZIP verschlüsseln). Für diese künftige Session: die echte Export-ZIP aus dem Testbetrieb soll als Grundlage mitgegeben werden. Das aktuell in `AUTO_EXPORT_TEST_PASSWORD` hartcodierte Passwort ist nur ein Platzhalter und muss dann durch den vom Viewer/Nutzer festgelegten Mechanismus ersetzt werden (die `overridePassword`-Option in `exportBackup()` ist bereits vorbereitet, damit diese Umstellung einfach bleibt).
+4. **DSGVO-Mängel und Auto-Export-Passwort** (aus der ersten Session dieses Tages, unverändert offen): `AUTO_EXPORT_TEST_PASSWORD` in `modules/autoExport.js` ist weiterhin eine Übergangslösung, `AUTO_EXPORT_INTERVAL_DAYS` steht weiterhin auf `1` (täglich, zum Testen) – **nach erfolgreichem Testbetrieb auf `28` zurücksetzen.** Löschkonzept/Aufbewahrungsfristen und AVV-Prüfung mit EmailJS sind organisatorisch/rechtlich zu klären, siehe vorherige Handoff-Version für Details.
 
-5. **Kein echtes Live-Deployment/Review durch den Nutzer** für die 3 Aufgaben dieser Session – alles wurde per Playwright im Headless-Browser getestet (inkl. simulierter Kamera), aber noch nicht von einem Menschen auf einem echten Gerät gesehen.
+5. **OCR-Texterkennung muss weiterhin real getestet werden** (aus einer sehr frühen Session, unverändert offen) – Sandbox kann die Sprachdaten-CDN nicht erreichen, siehe vorherige Handoff-Versionen im Git-Verlauf für Details. Die diese Session verbesserten Erkennungsregeln (2. ICD-10, Leitsymptomatik) konnten daher ebenfalls nur per Unit-Test, nicht per echtem Foto verifiziert werden.
+
+6. **Viewer-Session (separates Projekt).** Laut Nutzer folgt nach erfolgreichem Test des täglichen Exports eine separate Session für den lokalen PC-Viewer. Die echte Export-ZIP aus dem Testbetrieb soll dafür als Grundlage mitgegeben werden.
+
+7. **Kein echtes Live-Review durch den Nutzer** für die Aufgaben 7-10 dieser Session – alles wurde per Playwright im Headless-Browser bzw. per Unit-Test getestet, aber noch nicht von einem Menschen auf einem echten Gerät gesehen.
 
 ---
 
@@ -92,34 +119,41 @@ Repo: `/workspace/app-test` (GitHub: `alex-fast231/app-test`, Branch `claude/fas
 
 | Datei | Zweck |
 |---|---|
-| `index.html` | Globale CSS |
-| `modules/autoExport.js` | Automatischer Export; `AUTO_EXPORT_INTERVAL_DAYS` (aktuell 1, siehe Punkt 3 oben), `AUTO_EXPORT_TEST_PASSWORD` |
-| `modules/backup.js` | Export/Import-Logik; `exportBackup(runtimeData, { overridePassword })` |
-| `modules/ocr.js` | **Neu** – reine Textverarbeitung für OCR-Ergebnisse (`parseRezeptOcrText`), unabhängig testbar |
-| `modules/homes.js` | Geschäftslogik (Homes/Patienten/Rezepte/...), `createPatient`/`createRezept` werden jetzt im kombinierten Flow direkt hintereinander aufgerufen |
-| `ui/views.js` | **Sehr große Datei (~8100 Zeilen)** – `showCreatePatientRezeptView` (neuer kombinierter Flow inkl. Kamera/OCR) ist direkt vor `showZuzahlungsabfrageView` eingefügt |
-| `vendor/tesseract/` | **Neu** – lokal vendorte Tesseract.js-Engine (API, Worker, WASM-Core), siehe `vendor/tesseract/README.md` |
-| `viewer/index.html` | Eigenständiger Offline-Viewer (wird in separater Session weitergebaut, siehe Punkt 4 oben) |
+| `data/schema.js` | `APP_VERSION` (aktuell 3.9.8, automatischer Bump). `privacyMode`-Feld entfernt (Aufgabe 10). |
+| `core/utils.js` | **Neu in dieser Session:** `formatPatientName(patient)` – zentrale Nachname-Vorname-Formatierung (Aufgabe 7) |
+| `modules/ocr.js` | Textverarbeitung für OCR-Ergebnisse; erkennt jetzt 2 ICD-10-Codes + Leitsymptomatik-Freitext (Aufgabe 9) |
+| `modules/homes.js` | Geschäftslogik; `createRezept`/`updateRezept` um `icd10b` ergänzt; 3 tote Funktionen entfernt (Aufgabe 10) |
+| `ui/views.js` | **Sehr große Datei (~8300+ Zeilen)** – Rezept-Formulare (3x) um 2. ICD-10, Mehrfachauswahl-Leitsymptomatik, Straße/PLZ/Ort-Arztadresse, "Rezeptprüfung"-Überschrift erweitert und in Muster-13-Reihenfolge umsortiert (Aufgabe 8+9); `formatPatientName`-Import statt lokaler Duplikate (Aufgabe 7) |
+| `data/normalization.js` | `icd10b` ergänzt (Aufgabe 8), `privacyMode` entfernt (Aufgabe 10) |
+| `security/security-log.js` | `privacyMode`-Default entfernt (Aufgabe 10) |
+| `.githooks/pre-commit` + `scripts/bump-version.js` | Automatischer Versions-Bump bei jedem Commit (aus vorheriger Session, unverändert). Einmalige Einrichtung pro Klon: `git config core.hooksPath .githooks` |
+| `modules/autoExport.js` | `AUTO_EXPORT_INTERVAL_DAYS` (aktuell 1, siehe Punkt 4 oben), `AUTO_EXPORT_TEST_PASSWORD` |
+| `modules/assessmentInfo.js` | Info-Texte für Assessment-Tests (aus vorheriger Session, unverändert) |
+| `viewer/index.html` | Eigenständiger Offline-Viewer (wird in separater Session weitergebaut) |
 
 Zweites Repo `verordnungschecker-entwicklung`: unverändert.
 
 ---
 
-## 5. Original-Aufgabentext dieser Session (zur Referenz)
+## 5. Original-Aufgabentext dieser Session (zur Referenz, Fortsetzung ab Aufgabe 6)
 
-> **Aufgabe 1** – Abgabeliste Hervorhebung (Fix): Rote/orange Umrandung bei "Befreit" und "Doppeltermin" in der App-Übersicht entfernen; Hervorhebung nur in der PDF-Abgabeliste anzeigen.
+> **Aufgabe 6 – Dashboard:** "FaSt" Button/Einstieg aus dem Dashboard entfernen. *(Auf Nutzeranfrage übersprungen, siehe Abschnitt 1.)*
 >
-> **Aufgabe 2** – Export-Intervall temporär auf täglich setzen (nur zum Testen): Automatischen Export von "alle 4 Wochen" auf "täglich" setzen, nach Test wieder zurücksetzen. Export-ZIP muss verschlüsselt sein. Passwort wird später gemeinsam mit dem Viewer festgelegt; vorerst ein fest hinterlegtes Testpasswort verwenden.
+> **Aufgabe 7 – Name überall in der App:** In der gesamten App einheitlich: Nachname zuerst, dann Vorname (überall wo Namen angezeigt oder eingegeben werden).
 >
-> **Aufgabe 3** – Patient + Rezept zusammenführen & OCR mit Tesseract.js: Patient anlegen und Rezept anlegen zu einem einzigen Schritt zusammenführen (Einrichtung → "Neuen Patienten + Rezept anlegen" → Eingabe manuell oder Foto). Beim Anlegen wird gefragt: "Manuell eingeben" oder "Rezept abfotografieren" (Kamera → Tesseract.js liest lokal im Browser → befüllt Patientenname, Geburtsdatum, Arzt, ICD-10, Heilmittel, Anzahl, Ausstellungsdatum → Therapeut prüft/korrigiert → Foto wird sofort verworfen). Tesseract.js läuft vollständig lokal, Foto nur im Arbeitsspeicher, kein Foto verlässt das Gerät.
+> **Aufgabe 8 – Rezept anlegen:** Zwei ICD-10 Codes möglich (auf GKV-Rezept steht einer oder zwei). Leitsymptomatik: Mehrfachauswahl möglich. Arztadresse: PLZ und Ort ergänzen. Nach Leitsymptomatik-Eingabe eigene Überschrift "Rezeptprüfung" vor HB, Arzt-Stempel und Unterschrift – macht klar dass das eine Prüfung des Rezepts ist.
 >
-> **Hinweis:** Nach erfolgreichem Test des täglichen Exports folgt in separater Session ein lokaler PC-Viewer (einzelne HTML-Datei, öffnet verschlüsselte Export-ZIP, Passwort wird im Viewer festgelegt und verschlüsselt auch die Export-ZIP, zeigt Patienten/Verordnungen/Zuzahlungsstatus/Assessments/Therapieberichte/Doku/Kilometer/Abgabeliste, Suchfunktion, Nachbestellzettel nicht angezeigt aber in ZIP enthalten). Die echte Export-ZIP aus dem Testbetrieb wird als Grundlage mitgeliefert.
+> **Aufgabe 9 – OCR Fotoerkennung verbessern:** Claude Code recherchiert selbst das standardisierte GKV-Rezeptformat (Muster 16) mit allen Feldpositionen. Rezept-Ansicht in der App soll wie echtes GKV-Rezept aussehen damit Felder korrekt erkannt und zugeordnet werden. *(Korrigiert auf Muster 13, siehe Abschnitt 1.)*
+>
+> **Aufgabe 10 – Code bereinigen:** Tote Pfade und nicht verwendeten Code entfernen – nur solange die App dadurch nicht beeinträchtigt wird. Basis: Ergebnisse aus dem Code-Audit.
 
 ---
 
 ## 6. Empfohlener nächster Schritt für die neue Session
 
-1. GitHub-Push-Berechtigung klären, dann alle Commits pushen (oder das bereitgestellte ZIP manuell einspielen lassen).
-2. Vom Nutzer: echten OCR-Test mit einem Rezeptfoto durchführen lassen, Feedback zur Erkennungsqualität einholen.
-3. Nach erfolgreichem Test des täglichen Exports: `AUTO_EXPORT_INTERVAL_DAYS` zurück auf 28 setzen.
-4. Warten auf die separate Viewer-Session (neues Projekt/neue Anfrage laut Nutzer).
+1. GitHub-Push-Berechtigung klären, dann alle Commits pushen oder das bereitgestellte ZIP manuell einspielen lassen.
+2. Mit dem Nutzer klären, was mit "FaSt-Button" in Aufgabe 6 gemeint war (Screenshot hilfreich).
+3. Mit dem Nutzer die 3 offenen Code-Lücken aus Aufgabe 10 besprechen (fertigstellen oder entfernen).
+4. Vom Nutzer: Rückmeldung einholen, ob der tägliche Export-Test erfolgreich war → falls ja, `AUTO_EXPORT_INTERVAL_DAYS` auf 28 zurücksetzen.
+5. Vom Nutzer: Live-Review der Aufgaben 7-10 dieser Session auf einem echten Gerät, insbesondere ein echter OCR-Test mit einem fotografierten Muster-13-Rezept (Erkennungsqualität für 2. ICD-10 und Leitsymptomatik).
+6. Warten auf die separate Viewer-Session (neues Projekt/neue Anfrage laut Nutzer).
