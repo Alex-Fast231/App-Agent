@@ -458,7 +458,7 @@ export function buildBackupMeta(runtimeData) {
   };
 }
 
-export async function exportBackup(runtimeData) {
+export async function exportBackup(runtimeData, { overridePassword = null } = {}) {
   const encryptedAppData = await loadEncryptedAppData();
   const cryptoMeta = await loadCryptoMeta();
   const securityState = await loadSecurityState();
@@ -472,7 +472,11 @@ export async function exportBackup(runtimeData) {
     throw new Error("Runtime Session ist nicht entsperrt");
   }
 
-  const practicePassword = await getPracticePasswordFromRuntime({ runtimeKey, cryptoMeta });
+  // overridePassword erlaubt es Aufrufern (z.B. dem automatischen Export),
+  // die ZIP mit einem anderen Passwort zu verschlüsseln als dem
+  // Praxispasswort. Der manuelle Export ruft diese Funktion ohne
+  // overridePassword auf und verschlüsselt weiterhin mit dem Praxispasswort.
+  const practicePassword = overridePassword || await getPracticePasswordFromRuntime({ runtimeKey, cryptoMeta });
   const meta = buildBackupMeta(runtimeData);
   const zipLib = requireZip();
   const writer = new zipLib.ZipWriter(new zipLib.BlobWriter("application/zip"));
