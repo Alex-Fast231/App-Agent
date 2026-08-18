@@ -1,22 +1,11 @@
 FaSt-Doku – Vollständiger App-Stand für ein neues GitHub-Repo
 ================================================================
+Stand: 2026-08-16, dritte Session, Version 3.9.12
 
 Diese ZIP enthält den KOMPLETTEN, lauffähigen und getesteten Stand der
-App (Stand: 2026-08-16, nach Abschluss aller Aufgaben inkl. Aufgaben 7-10
-der zweiten Session). Alle Dateien wurden direkt aus der Arbeitsumgebung
-exportiert, in der die App auch getestet wurde – nicht aus der von Ihnen
-hochgeladenen v3-Datei zusammengesetzt.
-
-Wichtiger Hinweis zur v3-Datei
--------------------------------
-Die von Ihnen hochgeladene "FaSt_App_v3.zip" entsprach dem Stand VOR der
-ersten Session vom 16.08. (APP_VERSION 3.9.0, ohne die Aufgaben 1-5
-dieses Tages). Ihr manueller Merge-Versuch (v3 + ZIP der zweiten Session)
-hat deshalb nicht funktioniert: der zweiten Session fehlte dadurch die
-Grundlage aus der ersten Session (u.a. die CSS-Korrektur in index.html,
-modules/assessmentInfo.js, netlify.toml, .githooks/pre-commit,
-scripts/bump-version.js). Diese ZIP hier enthält bereits alles in einem
-konsistenten, getesteten Stand – kein weiteres Zusammenfügen nötig.
+App (alle 41 Dateien), direkt aus der getesteten Arbeitsumgebung
+exportiert. Kein Zusammenfügen mit älteren ZIPs nötig – einfach diese
+verwenden.
 
 So laden Sie ein neues GitHub-Repo hoch
 ------------------------------------------
@@ -25,11 +14,11 @@ Option A – über die GitHub-Weboberfläche (am einfachsten):
    .gitignore oder Lizenz beim Anlegen auswählen).
 2. Im neuen Repo auf "uploading an existing file" klicken.
 3. Alle Dateien/Ordner aus dieser ZIP (entpackt) per Drag & Drop
-   hochladen. Achtung: der versteckte Ordner ".githooks" wird von manchen
-   Datei-Explorern nicht angezeigt – ggf. "versteckte Dateien anzeigen"
-   aktivieren, damit er mit hochgeladen wird (für die automatische
-   Versionsnummer-Erhöhung bei jedem Commit relevant, aber nicht
-   zwingend nötig für den Betrieb der App selbst).
+   hochladen. Achtung: der versteckte Ordner ".githooks" wird von
+   manchen Datei-Explorern nicht angezeigt – ggf. "versteckte Dateien
+   anzeigen" aktivieren (nicht zwingend nötig für den Betrieb der App
+   selbst, nur für die automatische Versionsnummer-Erhöhung bei
+   künftigen lokalen Commits relevant).
 4. Commit direkt im Browser bestätigen.
 
 Option B – über die Kommandozeile (falls git installiert ist):
@@ -45,14 +34,14 @@ Nach dem Hochladen (nur bei Option B relevant, für zukünftige lokale
 Weiterentwicklung mit automatischer Versionserhöhung):
     git config core.hooksPath .githooks
 
+Wenn Sie stattdessen ein BESTEHENDES Repo aktualisieren möchten:
+einfach alle Dateien aus dieser ZIP über die bestehenden Dateien im
+Repo kopieren/hochladen (überschreiben) und committen.
+
 Deployment (z.B. Netlify)
 --------------------------
-Die Datei netlify.toml ist bereits korrekt benannt (in einer früheren
-Fassung hieß sie fälschlich "netlyfy.toml" und wurde von Netlify nie
-gelesen). Beim Verbinden des neuen Repos mit Netlify sollte die
-SPA-Weiterleitung und das Cache-Verhalten für sw.js jetzt automatisch
-korrekt angewendet werden.
+netlify.toml ist korrekt benannt und enthält die SPA-Weiterleitung
+sowie das Cache-Verhalten für sw.js.
 
-Bei Fragen oder falls nach dem Hochladen etwas nicht funktioniert: bitte
-mit genauer Fehlerbeschreibung/Screenshot zurückmelden, damit gezielt
-nachgebessert werden kann.
+Bei Fragen oder falls nach dem Hochladen etwas nicht funktioniert:
+bitte mit genauer Fehlerbeschreibung/Screenshot zurückmelden.

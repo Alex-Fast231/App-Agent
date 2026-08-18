@@ -2538,11 +2538,14 @@ export function showDashboardView({ onLock, keepOverviewOpen = false } = {}) {
         <button id="openHomesBtn" class="secondary" style="margin-top:0;">Einrichtungen</button>
       </div>
       <div class="row" style="margin-top:12px;">
+        <button id="openPatientenBtn" class="secondary" style="margin-top:0;">👤 Patienten</button>
         <button id="openAbgabeBtn" class="secondary" style="margin-top:0;">Abgabeliste</button>
-        <button id="openNachbestellBtn" class="secondary" style="margin-top:0;">Nachbestellung</button>
       </div>
       <div class="row" style="margin-top:12px;">
+        <button id="openNachbestellBtn" class="secondary" style="margin-top:0;">Nachbestellung</button>
         <button id="openKilometerBtn" class="secondary" style="margin-top:0;">Kilometer</button>
+      </div>
+      <div class="row" style="margin-top:12px;">
         <button id="openUnterschriftenblattBtn" class="secondary" style="margin-top:0;">Unterschriften</button>
       </div>
       <div class="row" style="margin-top:12px;">
@@ -2590,6 +2593,7 @@ export function showDashboardView({ onLock, keepOverviewOpen = false } = {}) {
   document.getElementById("openSettingsBtn").onclick = () => showSettingsView({ onLock });
   document.getElementById("openZeiterfassungBtn").onclick = () => showZeiterfassungView({ onLock });
   document.getElementById("openHomesBtn").onclick = () => showHomesView({ onLock });
+  document.getElementById("openPatientenBtn").onclick = () => showPatientenListeView({ onLock });
   document.getElementById("openAbgabeBtn").onclick = () => showAbgabeView({ onLock });
   document.getElementById("openNachbestellBtn").onclick = () => showNachbestellungView({ onLock });
   document.getElementById("openKilometerBtn").onclick = () => showKilometerView({ onLock });
@@ -2912,6 +2916,93 @@ export function showHomesView({ onLock, searchText = "" }) {
         console.error(err);
         alert(err?.message || "Heim konnte nicht gelöscht werden.");
       }
+    };
+  });
+}
+
+// Sammelt alle Patienten über alle Einrichtungen hinweg für die
+// alphabetische Patienten-Gesamtliste (Dashboard-Button "Patienten").
+function collectAllPatients(data) {
+  const results = [];
+  (data?.homes || []).forEach((home) => {
+    (home?.patients || []).forEach((patient) => {
+      if (isPatientDeceased(patient)) return;
+      results.push({ patient, homeId: home?.homeId || "", homeName: home?.name || "Ohne Name" });
+    });
+  });
+  return results.sort((a, b) => {
+    const aName = formatPatientName(a.patient);
+    const bName = formatPatientName(b.patient);
+    return collatorDE.compare(aName, bName);
+  });
+}
+
+export function showPatientenListeView({ onLock, searchText = "" } = {}) {
+  bindLockButton(onLock);
+  setCurrentView("patienten-liste", { searchText });
+
+  const runtimeData = getRuntimeData();
+  const q = String(searchText || "").trim().toLowerCase();
+  const allPatients = collectAllPatients(runtimeData).filter(({ patient, homeName }) => {
+    if (!q) return true;
+    const haystack = [patient.firstName, patient.lastName, patient.birthDate, homeName].join(" ").toLowerCase();
+    return haystack.includes(q);
+  });
+
+  render(`
+    <div class="card">
+      <h2>Patienten</h2>
+      <p class="muted">${allPatients.length} Patient(en) über alle Einrichtungen, alphabetisch sortiert.</p>
+      <button id="backDashboardBtn" class="secondary">Zurück zum Dashboard</button>
+    </div>
+
+    <div class="card">
+      <label for="patientenListeSearch">Suche nach Name, Geburtsdatum oder Einrichtung</label>
+      <input id="patientenListeSearch" type="text" value="${escapeHtml(searchText)}" placeholder="z.B. Müller oder Heim Sonnenschein">
+      <div class="row">
+        <button id="runPatientenListeSearchBtn" class="secondary">Suchen</button>
+        <button id="clearPatientenListeSearchBtn" class="secondary">Suche löschen</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="list-stack">
+        ${allPatients.length === 0 ? `<p class="muted">Keine passenden Patienten gefunden.</p>` : ""}
+        ${allPatients.map(({ patient, homeId, homeName }) => `
+          <div class="compact-card">
+            <div style="font-weight:600;">${escapeHtml(formatPatientName(patient) || "Ohne Namen")}</div>
+            <div class="compact-meta" style="margin-bottom:8px;">${escapeHtml(homeName)}${patient.birthDate ? ` · geb. ${escapeHtml(patient.birthDate)}` : ""}</div>
+            <div class="inline-action-stack">
+              <button class="openPatientFromListeBtn secondary" data-home-id="${escapeHtml(homeId)}" data-patient-id="${escapeHtml(patient.patientId)}">Rezept</button>
+              <button class="openOptimierungFromListeBtn secondary" data-home-id="${escapeHtml(homeId)}" data-patient-id="${escapeHtml(patient.patientId)}">Rezeptoptimierer</button>
+            </div>
+          </div>
+        `).join("")}
+      </div>
+    </div>
+  `);
+
+  document.getElementById("backDashboardBtn").onclick = () => showDashboardView({ onLock });
+
+  const runSearch = () => {
+    showPatientenListeView({ onLock, searchText: document.getElementById("patientenListeSearch").value });
+  };
+  document.getElementById("runPatientenListeSearchBtn").onclick = runSearch;
+  document.getElementById("patientenListeSearch").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") runSearch();
+  });
+  document.getElementById("clearPatientenListeSearchBtn").onclick = () => {
+    showPatientenListeView({ onLock, searchText: "" });
+  };
+
+  document.querySelectorAll(".openPatientFromListeBtn").forEach((btn) => {
+    btn.onclick = () => {
+      showPatientDetailView({ onLock, homeId: btn.dataset.homeId, patientId: btn.dataset.patientId });
+    };
+  });
+  document.querySelectorAll(".openOptimierungFromListeBtn").forEach((btn) => {
+    btn.onclick = () => {
+      showRezeptoptimierungView({ onLock, homeId: btn.dataset.homeId, patientId: btn.dataset.patientId });
     };
   });
 }
@@ -4843,12 +4934,6 @@ export function showPatientDetailView({ onLock, homeId, patientId }) {
       </div>
     </div>
 
-    <div class="card">
-      <h3>Rezeptoptimierung</h3>
-      <p class="muted">Diagnose eingeben und passendes Heilmittel nach Katalog vorschlagen lassen.</p>
-      <button id="openRezeptoptimierungBtn" class="secondary">Rezeptoptimierung öffnen</button>
-    </div>
-
     <details class="accordion" style="margin-top:12px;">
       <summary>
         <span>Abgegebene Rezepte</span>
@@ -4920,10 +5005,6 @@ export function showPatientDetailView({ onLock, homeId, patientId }) {
 
   document.getElementById("openCreateRezeptBtn").onclick = () => {
     showCreateRezeptView({ onLock, homeId, patientId });
-  };
-
-  document.getElementById("openRezeptoptimierungBtn").onclick = () => {
-    showRezeptoptimierungView({ onLock, homeId, patientId });
   };
 
   document.getElementById("deletePatientBtn").onclick = async () => {
@@ -5039,7 +5120,7 @@ export function showRezeptoptimierungView({ onLock, homeId, patientId }) {
   function buildOptimierungLetterHtml(ergebnis) {
     const settings = runtimeData?.settings || {};
     const patientName = `${patient.lastName || ""}, ${patient.firstName || ""}`.replace(/^,\s*/, "").trim() || "—";
-    const heilmittelLabel = VERGUETUNG[ergebnis.empfehlung]?.label || ergebnis.empfehlung;
+    const heilmittelLabel = EMPFEHLUNG_ZU_ITEM_TYPE[ergebnis.empfehlung] || ergebnis.empfehlung;
     const leitsymptomatik = getDefaultLeitsymptomatik(ergebnis.gruppe);
     const empfohleneMenge = ergebnis.lhb ? (ergebnis.orientierendeMenge || ergebnis.maxProVO) : ergebnis.maxProVO;
 
