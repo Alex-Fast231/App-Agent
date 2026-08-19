@@ -91,7 +91,9 @@ import {
 import * as Assessment from "../modules/assessment.js";
 import * as AssessmentInfo from "../modules/assessmentInfo.js";
 import { exportBackup, importBackup, downloadBlob, validateBackupZip } from "../modules/backup.js";
-import { parseRezeptOcrText } from "../modules/ocr.js";
+import { parseRezeptOcrFields } from "../modules/ocr.js";
+import { MUSTER13_FIELD_REGIONS, MUSTER13_GUIDE_REGION, regionToPixelRect } from "../modules/ocrRegions.js";
+import { compareTwoRegionsDarkness } from "../modules/ocrMarkDetection.js";
 import { generateId, formatPatientName } from "../core/utils.js";
 import {
   normalizeDeDateInput,
@@ -3638,6 +3640,67 @@ function loadTesseractScript() {
   return loadTesseractScript._promise;
 }
 
+// Lädt die lokal vendorte PDF.js-Bibliothek einmalig nach (nicht bei
+// jedem App-Start, nur wenn "Fax/PDF hochladen" tatsächlich genutzt
+// wird) - für den Fall, dass Therapeuten ein per Fax empfangenes Rezept
+// als PDF statt als Papierausdruck vorliegen haben. Läuft vollständig im
+// Browser; die Datei wird nie hochgeladen/verschickt.
+function loadPdfJsScript() {
+  if (globalThis.pdfjsLib) return Promise.resolve(globalThis.pdfjsLib);
+  if (loadPdfJsScript._promise) return loadPdfJsScript._promise;
+  loadPdfJsScript._promise = import("../vendor/pdfjs/pdf.min.mjs")
+    .then((mod) => {
+      mod.GlobalWorkerOptions.workerSrc = "./vendor/pdfjs/pdf.worker.min.mjs";
+      globalThis.pdfjsLib = mod;
+      return mod;
+    })
+    .catch((err) => {
+      loadPdfJsScript._promise = null;
+      throw err;
+    });
+  return loadPdfJsScript._promise;
+}
+
+// Rendert die erste Seite einer PDF-Datei in ein neues Canvas (in
+// vergleichsweise hoher Auflösung, damit die anschließende Feld-OCR
+// genug Details hat). Weitere Seiten werden ignoriert - ein per Fax
+// empfangenes Heilmittelrezept ist praktisch immer einseitig.
+async function renderPdfFileToCanvas(file) {
+  const pdfjsLib = await loadPdfJsScript();
+  const data = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data }).promise;
+  const page = await pdf.getPage(1);
+  const viewport = page.getViewport({ scale: 2.5 });
+
+  const canvas = document.createElement("canvas");
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+  return canvas;
+}
+
+// Lädt eine Bilddatei (JPG/PNG/...) in ein neues Canvas - für den Fall,
+// dass ein Fax/Scan bereits als Bild statt als PDF vorliegt.
+function renderImageFileToCanvas(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      canvas.getContext("2d").drawImage(img, 0, 0);
+      URL.revokeObjectURL(url);
+      resolve(canvas);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Bilddatei konnte nicht gelesen werden"));
+    };
+    img.src = url;
+  });
+}
+
 // Kombinierter Flow: Patient anlegen und Rezept anlegen in einem Schritt
 // (statt wie bisher zwei getrennte Vorgänge). Wahlweise per manueller
 // Eingabe oder per Fotoerkennung (Tesseract.js OCR, läuft vollständig im
@@ -3674,6 +3737,7 @@ export function showCreatePatientRezeptView({ onLock, homeId, searchText = "" })
         <h3>Eingabe</h3>
         <button id="manualEntryBtn">Manuell eingeben</button>
         <button id="photoEntryBtn" class="secondary">📷 Rezept abfotografieren</button>
+        <button id="fileEntryBtn" class="secondary">📠 Fax/PDF hochladen</button>
       </div>
     `);
 
@@ -3682,6 +3746,156 @@ export function showCreatePatientRezeptView({ onLock, homeId, searchText = "" })
     };
     document.getElementById("manualEntryBtn").onclick = () => renderCombinedForm(null);
     document.getElementById("photoEntryBtn").onclick = () => renderCameraCapture();
+    document.getElementById("fileEntryBtn").onclick = () => renderFileUpload();
+  }
+
+  // Textfelder werden per Tesseract-OCR einzeln erkannt (siehe
+  // MUSTER13_FIELD_REGIONS). hausbesuch/dringend sind bewusst nicht
+  // dabei - deren Ankreuzstatus wird separat per Kontrastanalyse
+  // ausgewertet (siehe unten), nicht per Text-OCR.
+  const OCR_TEXT_FIELD_KEYS = ["name", "geburtsdatum", "ausstellungsdatum", "icd10", "diagnosengruppe", "leitsymptomatik", "heilmittel", "einheiten"];
+
+  // CSS für den Ausrichtungsrahmen (Kamera-Live-Vorschau und Datei-Upload-
+  // Vorschau nutzen exakt dieselbe Region, siehe MUSTER13_GUIDE_REGION).
+  function guideOverlayStyle() {
+    const r = MUSTER13_GUIDE_REGION;
+    return `position:absolute; top:${(r.y0 * 100).toFixed(1)}%; left:${(r.x0 * 100).toFixed(1)}%; width:${((r.x1 - r.x0) * 100).toFixed(1)}%; height:${((r.y1 - r.y0) * 100).toFixed(1)}%; border:3px dashed #22c55e; border-radius:8px; pointer-events:none;`;
+  }
+
+  // Schneidet einen rechteckigen Bereich (Pixelkoordinaten) aus einem
+  // Quell-Canvas in ein neues, kleineres Canvas - für die Region-of-
+  // Interest-Erkennung: jedes Formularfeld wird als eigenes kleines Bild
+  // an Tesseract übergeben statt des gesamten Fotos.
+  function cropCanvasToRect(sourceCanvas, rect) {
+    const cropped = document.createElement("canvas");
+    cropped.width = rect.w;
+    cropped.height = rect.h;
+    cropped.getContext("2d").drawImage(sourceCanvas, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h);
+    return cropped;
+  }
+
+  // Ermittelt das Ausrichtungsrechteck (der in der Kamera-Vorschau
+  // eingeblendete Rahmen, an dem der Therapeut das Formular ausrichten
+  // soll) in den nativen Pixelkoordinaten des aufgenommenen Video-Frames.
+  // Ohne automatische Formularerkennung (Kantenerkennung/Entzerrung, was
+  // eine zusätzliche Bildverarbeitungs-Bibliothek und in dieser Sandbox
+  // nicht mit echten Fotos testbaren Code erfordern würde) ist dieser
+  // Rahmen die einzige "Normalisierung" auf ein einheitliches Format:
+  // Wenn der Therapeut das Formular beim Fotografieren an den Rahmen
+  // anpasst, entsprechen die MUSTER13_FIELD_REGIONS-Prozentangaben
+  // näherungsweise den richtigen Bildbereichen. Kann die Rahmenposition
+  // aus irgendeinem Grund nicht ermittelt werden, wird ersatzweise das
+  // gesamte Kamerabild verwendet (Fallback, kein Absturz).
+  function getGuideRectInVideoPixels(videoEl, overlayEl) {
+    try {
+      const videoBox = videoEl.getBoundingClientRect();
+      const overlayBox = overlayEl.getBoundingClientRect();
+      if (!videoBox.width || !videoBox.height) return null;
+
+      const scaleX = videoEl.videoWidth / videoBox.width;
+      const scaleY = videoEl.videoHeight / videoBox.height;
+
+      return {
+        x: Math.max(0, Math.round((overlayBox.left - videoBox.left) * scaleX)),
+        y: Math.max(0, Math.round((overlayBox.top - videoBox.top) * scaleY)),
+        w: Math.min(videoEl.videoWidth, Math.round(overlayBox.width * scaleX)),
+        h: Math.min(videoEl.videoHeight, Math.round(overlayBox.height * scaleY))
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  // Führt die feldbasierte OCR-Erkennung (Text je Feld + Hausbesuch-
+  // Kontrastanalyse) auf einem bereits auf den Formularbereich
+  // zugeschnittenen Canvas aus - gemeinsam genutzt von Kamera-Aufnahme
+  // und Datei-Upload (PDF/Bild), damit beide Wege exakt dieselbe Logik
+  // durchlaufen. Wirft bei einem grundsätzlichen Engine-Fehler (erstes
+  // Feld) oder Zeitüberschreitung, damit die aufrufende Stelle die
+  // Standard-Fehlermeldung anzeigen kann.
+  async function runRoiOcrOnFormCanvas(formCanvas, onProgress) {
+    let worker = null;
+    // Eigener Timeout, unabhängig davon, ob Tesseract.js/der Worker im
+    // Fehlerfall (z.B. kein Netz für die Sprachdaten-CDN) sauber ablehnt
+    // oder hängen bleibt - die UI darf nie dauerhaft auf "Text wird
+    // erkannt ..." stehen bleiben. Höher als bei einem Ein-Durchlauf-Scan,
+    // weil mehrere einzelne Felder statt eines Gesamtbilds erkannt werden.
+    const ocrTimeout = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error("Texterkennung hat zu lange gedauert (Zeitüberschreitung)")), 45000);
+    });
+
+    try {
+      await loadTesseractScript();
+      const fieldTexts = await Promise.race([
+        (async () => {
+          worker = await globalThis.Tesseract.createWorker("deu", 1, {
+            corePath: "./vendor/tesseract/tesseract-core-simd-lstm.wasm.js",
+            workerPath: "./vendor/tesseract/worker.min.js"
+          });
+
+          const texts = {};
+          for (let i = 0; i < OCR_TEXT_FIELD_KEYS.length; i++) {
+            const key = OCR_TEXT_FIELD_KEYS[i];
+            if (onProgress) onProgress(i + 1, OCR_TEXT_FIELD_KEYS.length);
+            const rect = regionToPixelRect(MUSTER13_FIELD_REGIONS[key], formCanvas.width, formCanvas.height);
+            const fieldCanvas = cropCanvasToRect(formCanvas, rect);
+
+            if (i === 0) {
+              // Erstes Feld: ein Fehler hier deutet auf ein grund-
+              // sätzliches Problem der Erkennungs-Engine hin (z.B.
+              // Sprachdaten-CDN nicht erreichbar) und wird bewusst NICHT
+              // abgefangen, sondern nach oben durchgereicht - sonst würde
+              // derselbe Infrastrukturfehler bei jedem der restlichen
+              // Felder erneut auftreten (langsam, und am Ende erscheint
+              // fälschlich das leere Formular statt der Fehlermeldung
+              // "bitte manuell eingeben").
+              const result = await worker.recognize(fieldCanvas);
+              texts[key] = result?.data?.text || "";
+            } else {
+              try {
+                const result = await worker.recognize(fieldCanvas);
+                texts[key] = result?.data?.text || "";
+              } catch (fieldErr) {
+                // Ab dem zweiten Feld gilt die Engine als funktionsfähig
+                // (erstes Feld ist ohne Fehler durchgelaufen) - ein
+                // einzelnes Feld ohne lesbaren Text darf dann den
+                // restlichen Durchlauf nicht abbrechen, einfach leer
+                // lassen und der Therapeut füllt es manuell aus.
+                console.error(`OCR-Feld '${key}' fehlgeschlagen:`, fieldErr);
+                texts[key] = "";
+              }
+            }
+          }
+
+          // Hausbesuch ja/nein: NICHT per Text-OCR (beide Wortoptionen
+          // stehen als Druck immer in der Region), sondern per
+          // Kontrastvergleich zwischen linker und rechter Bildhälfte der
+          // Ankreuzzeile - vgl. modules/ocrMarkDetection.js.
+          try {
+            const hbRect = regionToPixelRect(MUSTER13_FIELD_REGIONS.hausbesuch, formCanvas.width, formCanvas.height);
+            const hbCanvas = cropCanvasToRect(formCanvas, hbRect);
+            const hbCtx = hbCanvas.getContext("2d");
+            const halfW = Math.max(1, Math.floor(hbCanvas.width / 2));
+            const leftData = hbCtx.getImageData(0, 0, halfW, hbCanvas.height);
+            const rightData = hbCtx.getImageData(hbCanvas.width - halfW, 0, halfW, hbCanvas.height);
+            const side = compareTwoRegionsDarkness(leftData, rightData);
+            texts._hausbesuch = side === "a" ? "ja" : side === "b" ? "nein" : "";
+          } catch (markErr) {
+            console.error("Hausbesuch-Erkennung fehlgeschlagen:", markErr);
+            texts._hausbesuch = "";
+          }
+
+          return texts;
+        })(),
+        ocrTimeout
+      ]);
+
+      const parsed = parseRezeptOcrFields(fieldTexts);
+      parsed.hausbesuch = fieldTexts._hausbesuch || "";
+      return parsed;
+    } finally {
+      if (worker) worker.terminate().catch(() => {});
+    }
   }
 
   function renderCameraCapture() {
@@ -3689,11 +3903,15 @@ export function showCreatePatientRezeptView({ onLock, homeId, searchText = "" })
       <div class="card">
         <h2>Rezept abfotografieren</h2>
         <p class="muted">Das Foto wird nur im Browser verarbeitet und danach sofort verworfen. Es verlässt zu keinem Zeitpunkt das Gerät.</p>
+        <p class="muted">Bitte das Rezept möglichst flach, gerade und formatfüllend innerhalb des Rahmens fotografieren.</p>
         <button id="backToModeBtn" class="secondary">Zurück</button>
       </div>
 
       <div class="card">
-        <video id="ocrVideo" autoplay playsinline muted style="width:100%; border-radius:12px; background:#000; display:block;"></video>
+        <div style="position:relative;">
+          <video id="ocrVideo" autoplay playsinline muted style="width:100%; border-radius:12px; background:#000; display:block;"></video>
+          <div id="ocrGuideOverlay" style="${guideOverlayStyle()}"></div>
+        </div>
         <canvas id="ocrCanvas" style="display:none;"></canvas>
         <button id="ocrCaptureBtn" style="margin-top:12px;" disabled>Foto aufnehmen</button>
         <div id="ocrMsg" class="muted" style="margin-top:10px;"></div>
@@ -3703,6 +3921,7 @@ export function showCreatePatientRezeptView({ onLock, homeId, searchText = "" })
     document.getElementById("backToModeBtn").onclick = () => renderModeSelection();
 
     const video = document.getElementById("ocrVideo");
+    const guideOverlay = document.getElementById("ocrGuideOverlay");
     const captureBtn = document.getElementById("ocrCaptureBtn");
     const msg = document.getElementById("ocrMsg");
 
@@ -3725,10 +3944,16 @@ export function showCreatePatientRezeptView({ onLock, homeId, searchText = "" })
       });
 
     captureBtn.onclick = async () => {
-      const canvas = document.getElementById("ocrCanvas");
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      canvas.getContext("2d").drawImage(video, 0, 0);
+      const fullCanvas = document.getElementById("ocrCanvas");
+      fullCanvas.width = video.videoWidth;
+      fullCanvas.height = video.videoHeight;
+      fullCanvas.getContext("2d").drawImage(video, 0, 0);
+
+      const guideRect = getGuideRectInVideoPixels(video, guideOverlay);
+      const formCanvas = guideRect
+        ? cropCanvasToRect(fullCanvas, guideRect)
+        : fullCanvas;
+
       // Kamera sofort stoppen, sobald das Bild im Canvas liegt.
       stopCameraStream();
 
@@ -3736,29 +3961,10 @@ export function showCreatePatientRezeptView({ onLock, homeId, searchText = "" })
       msg.className = "muted";
       msg.textContent = "Text wird erkannt ...";
 
-      let worker = null;
-      // Eigener Timeout, unabhängig davon, ob Tesseract.js/der Worker im
-      // Fehlerfall (z.B. kein Netz für die Sprachdaten-CDN) sauber
-      // ablehnt oder hängen bleibt - die UI darf nie dauerhaft auf
-      // "Text wird erkannt ..." stehen bleiben.
-      const ocrTimeout = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error("Texterkennung hat zu lange gedauert (Zeitüberschreitung)")), 30000);
-      });
-
       try {
-        await loadTesseractScript();
-        const data = await Promise.race([
-          (async () => {
-            worker = await globalThis.Tesseract.createWorker("deu", 1, {
-              corePath: "./vendor/tesseract/tesseract-core-simd-lstm.wasm.js",
-              workerPath: "./vendor/tesseract/worker.min.js"
-            });
-            const result = await worker.recognize(canvas);
-            return result.data;
-          })(),
-          ocrTimeout
-        ]);
-        const parsed = parseRezeptOcrText(data?.text || "");
+        const parsed = await runRoiOcrOnFormCanvas(formCanvas, (i, total) => {
+          msg.textContent = `Text wird erkannt ... (Feld ${i} von ${total})`;
+        });
         renderCombinedForm(parsed);
       } catch (err) {
         console.error("OCR fehlgeschlagen:", err);
@@ -3766,12 +3972,114 @@ export function showCreatePatientRezeptView({ onLock, homeId, searchText = "" })
         msg.textContent = "Texterkennung fehlgeschlagen (evtl. keine Internetverbindung für die Spracherkennung). Bitte manuell eingeben.";
         captureBtn.disabled = false;
       } finally {
-        if (worker) worker.terminate().catch(() => {});
         // Foto/Canvas-Daten sofort verwerfen, unabhängig vom Ergebnis.
-        const ctx = canvas.getContext("2d");
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        canvas.width = 0;
-        canvas.height = 0;
+        [fullCanvas, formCanvas].forEach((c) => {
+          if (!c) return;
+          const ctx = c.getContext("2d");
+          ctx.clearRect(0, 0, c.width, c.height);
+          c.width = 0;
+          c.height = 0;
+        });
+      }
+    };
+  }
+
+  // Alternative zum Abfotografieren: ein bereits digital vorliegendes
+  // Rezept hochladen (z.B. ein per Fax empfangenes PDF, oder ein Scan/
+  // Foto als Bilddatei). Durchläuft dieselbe ROI-Feld-Erkennung wie die
+  // Kamera-Aufnahme (siehe runRoiOcrOnFormCanvas).
+  function renderFileUpload() {
+    stopCameraStream();
+    render(`
+      <div class="card">
+        <h2>Fax/PDF hochladen</h2>
+        <p class="muted">Die Datei wird nur im Browser verarbeitet und danach sofort verworfen. Sie verlässt zu keinem Zeitpunkt das Gerät.</p>
+        <p class="muted">Unterstützt: PDF (z.B. per Fax empfangenes Rezept) oder Bilddatei (JPG/PNG).</p>
+        <button id="backToModeBtn" class="secondary">Zurück</button>
+      </div>
+
+      <div class="card">
+        <button id="chooseFileBtn">Datei auswählen</button>
+        <input id="ocrFileInput" type="file" accept="application/pdf,image/*" style="display:none;">
+        <div id="ocrFilePreviewWrap" style="display:none; margin-top:12px;">
+          <div style="position:relative;">
+            <canvas id="ocrFilePreviewCanvas" style="width:100%; border-radius:12px; display:block; background:#fff;"></canvas>
+            <div id="ocrFileGuideOverlay" style="${guideOverlayStyle()}"></div>
+          </div>
+          <p class="muted" style="margin-top:8px;">Falls das Formular nicht ungefähr im gestrichelten Rahmen liegt, bitte stattdessen manuell eingeben.</p>
+          <button id="ocrFileRecognizeBtn" style="margin-top:4px;">Text erkennen</button>
+        </div>
+        <div id="ocrFileMsg" class="muted" style="margin-top:10px;"></div>
+      </div>
+    `);
+
+    document.getElementById("backToModeBtn").onclick = () => renderModeSelection();
+
+    const fileInput = document.getElementById("ocrFileInput");
+    const previewWrap = document.getElementById("ocrFilePreviewWrap");
+    const previewCanvas = document.getElementById("ocrFilePreviewCanvas");
+    const recognizeBtn = document.getElementById("ocrFileRecognizeBtn");
+    const msg = document.getElementById("ocrFileMsg");
+    let sourceCanvas = null;
+
+    document.getElementById("chooseFileBtn").onclick = () => fileInput.click();
+
+    fileInput.onchange = async () => {
+      const file = fileInput.files?.[0];
+      if (!file) return;
+
+      msg.className = "muted";
+      msg.textContent = "Datei wird geladen ...";
+      previewWrap.style.display = "none";
+      sourceCanvas = null;
+
+      try {
+        const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+        sourceCanvas = isPdf ? await renderPdfFileToCanvas(file) : await renderImageFileToCanvas(file);
+
+        previewCanvas.width = sourceCanvas.width;
+        previewCanvas.height = sourceCanvas.height;
+        previewCanvas.getContext("2d").drawImage(sourceCanvas, 0, 0);
+
+        previewWrap.style.display = "block";
+        msg.textContent = "";
+      } catch (err) {
+        console.error("Datei konnte nicht gelesen werden:", err);
+        msg.className = "error";
+        msg.textContent = "Datei konnte nicht gelesen werden. Bitte eine andere Datei wählen oder manuell eingeben.";
+        sourceCanvas = null;
+      }
+    };
+
+    recognizeBtn.onclick = async () => {
+      if (!sourceCanvas) return;
+      recognizeBtn.disabled = true;
+      msg.className = "muted";
+      msg.textContent = "Text wird erkannt ...";
+
+      const guideRect = regionToPixelRect(MUSTER13_GUIDE_REGION, sourceCanvas.width, sourceCanvas.height);
+      const formCanvas = cropCanvasToRect(sourceCanvas, guideRect);
+
+      try {
+        const parsed = await runRoiOcrOnFormCanvas(formCanvas, (i, total) => {
+          msg.textContent = `Text wird erkannt ... (Feld ${i} von ${total})`;
+        });
+        renderCombinedForm(parsed);
+      } catch (err) {
+        console.error("OCR fehlgeschlagen:", err);
+        msg.className = "error";
+        msg.textContent = "Texterkennung fehlgeschlagen. Bitte manuell eingeben.";
+        recognizeBtn.disabled = false;
+      } finally {
+        // Datei-/Canvas-Daten sofort verwerfen, unabhängig vom Ergebnis.
+        [sourceCanvas, formCanvas].forEach((c) => {
+          if (!c) return;
+          const ctx = c.getContext("2d");
+          ctx.clearRect(0, 0, c.width, c.height);
+          c.width = 0;
+          c.height = 0;
+        });
+        sourceCanvas = null;
       }
     };
   }
@@ -3819,6 +4127,7 @@ export function showCreatePatientRezeptView({ onLock, homeId, searchText = "" })
 
         <label for="icd10">ICD-10 Code</label>
         <input id="icd10" type="text" placeholder="z.B. M54.5" value="${escapeHtml(prefill?.icd10 || "")}">
+        ${prefill?.diagnosengruppeHint ? `<p class="muted" style="margin-top:-8px;">Erkannte Diagnosegruppe laut Formular: ${escapeHtml(prefill.diagnosengruppeHint)}</p>` : ""}
 
         <label for="icd10b">2. ICD-10 Code (optional)</label>
         <input id="icd10b" type="text" placeholder="z.B. M54.5" value="${escapeHtml(prefill?.icd10b || "")}">
@@ -3836,7 +4145,7 @@ export function showCreatePatientRezeptView({ onLock, homeId, searchText = "" })
         </div>
 
         <label for="hausbesuch">Hausbesuch (Rezeptvermerk)</label>
-        ${renderJaNeinSelect("hausbesuch", "")}
+        ${renderJaNeinSelect("hausbesuch", prefill?.hausbesuch || "")}
 
         <label for="arztStempel">Arzt-Stempel vorhanden</label>
         ${renderJaNeinSelect("arztStempel", "")}

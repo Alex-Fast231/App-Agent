@@ -1,11 +1,11 @@
 FaSt-Doku – Vollständiger App-Stand für ein neues GitHub-Repo
 ================================================================
-Stand: 2026-08-16, dritte Session, Version 3.9.12
+Stand: 2026-08-19, fünfte Session (Feldkoordinaten-Fix + Fax/PDF-Upload), Version 3.9.18
 
 Diese ZIP enthält den KOMPLETTEN, lauffähigen und getesteten Stand der
-App (alle 41 Dateien), direkt aus der getesteten Arbeitsumgebung
-exportiert. Kein Zusammenfügen mit älteren ZIPs nötig – einfach diese
-verwenden.
+App (alle 47 Dateien, inkl. neuem Fax/PDF-Upload für digital empfangene
+Rezepte), direkt aus der getesteten Arbeitsumgebung exportiert. Kein
+Zusammenfügen mit älteren ZIPs nötig – einfach diese verwenden.
 
 So laden Sie ein neues GitHub-Repo hoch
 ------------------------------------------
@@ -37,6 +37,27 @@ Weiterentwicklung mit automatischer Versionserhöhung):
 Wenn Sie stattdessen ein BESTEHENDES Repo aktualisieren möchten:
 einfach alle Dateien aus dieser ZIP über die bestehenden Dateien im
 Repo kopieren/hochladen (überschreiben) und committen.
+
+Neu in dieser Version (gegenüber der letzten ZIP)
+----------------------------------------------------
+1. Neuer Button "📠 Fax/PDF hochladen" bei "Patient + Rezept anlegen":
+   Alternative zur Kamera-Aufnahme für Therapeuten, die Rezepte digital
+   erhalten (z.B. per Fax als PDF, oder als Bilddatei). Die Datei wird
+   ausschließlich lokal im Browser verarbeitet (PDF-Rendering per
+   vendorierter PDF.js-Bibliothek) und nutzt danach dieselbe
+   Muster-13-Feld-für-Feld-Texterkennung wie die Kamera-Aufnahme.
+2. Bugfix am Ausrichtungsrahmen: Das Seitenverhältnis des gestrichelten
+   Rahmens (Kamera-Vorschau UND jetzt auch Datei-Vorschau) war durch
+   einen Formel-Fehler zu groß berechnet und ragte über den sichtbaren
+   Bereich hinaus. Jetzt korrekt und für beide Ansichten identisch.
+
+Details siehe HANDOFF_SUMMARY.md, Abschnitt "-1" (oben) - dort auch die
+wichtige Bitte um einen echten Testlauf mit einem fotografierten ODER
+hochgeladenen Muster-13-Formular, da sich die eigentliche
+Texterkennung in der Entwicklungsumgebung nicht mit echten
+Rezept-Dateien testen ließ (die Sprachdaten-CDN ist dort blockiert).
+Das PDF-Rendering selbst wurde davon unabhängig vollständig getestet
+und funktioniert nachweislich offline im Browser.
 
 Deployment (z.B. Netlify)
 --------------------------
