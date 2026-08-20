@@ -3640,67 +3640,6 @@ function loadTesseractScript() {
   return loadTesseractScript._promise;
 }
 
-// Lädt die lokal vendorte PDF.js-Bibliothek einmalig nach (nicht bei
-// jedem App-Start, nur wenn "Fax/PDF hochladen" tatsächlich genutzt
-// wird) - für den Fall, dass Therapeuten ein per Fax empfangenes Rezept
-// als PDF statt als Papierausdruck vorliegen haben. Läuft vollständig im
-// Browser; die Datei wird nie hochgeladen/verschickt.
-function loadPdfJsScript() {
-  if (globalThis.pdfjsLib) return Promise.resolve(globalThis.pdfjsLib);
-  if (loadPdfJsScript._promise) return loadPdfJsScript._promise;
-  loadPdfJsScript._promise = import("../vendor/pdfjs/pdf.min.mjs")
-    .then((mod) => {
-      mod.GlobalWorkerOptions.workerSrc = "./vendor/pdfjs/pdf.worker.min.mjs";
-      globalThis.pdfjsLib = mod;
-      return mod;
-    })
-    .catch((err) => {
-      loadPdfJsScript._promise = null;
-      throw err;
-    });
-  return loadPdfJsScript._promise;
-}
-
-// Rendert die erste Seite einer PDF-Datei in ein neues Canvas (in
-// vergleichsweise hoher Auflösung, damit die anschließende Feld-OCR
-// genug Details hat). Weitere Seiten werden ignoriert - ein per Fax
-// empfangenes Heilmittelrezept ist praktisch immer einseitig.
-async function renderPdfFileToCanvas(file) {
-  const pdfjsLib = await loadPdfJsScript();
-  const data = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data }).promise;
-  const page = await pdf.getPage(1);
-  const viewport = page.getViewport({ scale: 2.5 });
-
-  const canvas = document.createElement("canvas");
-  canvas.width = viewport.width;
-  canvas.height = viewport.height;
-  await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
-  return canvas;
-}
-
-// Lädt eine Bilddatei (JPG/PNG/...) in ein neues Canvas - für den Fall,
-// dass ein Fax/Scan bereits als Bild statt als PDF vorliegt.
-function renderImageFileToCanvas(file) {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
-      const canvas = document.createElement("canvas");
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-      canvas.getContext("2d").drawImage(img, 0, 0);
-      URL.revokeObjectURL(url);
-      resolve(canvas);
-    };
-    img.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error("Bilddatei konnte nicht gelesen werden"));
-    };
-    img.src = url;
-  });
-}
-
 // Kombinierter Flow: Patient anlegen und Rezept anlegen in einem Schritt
 // (statt wie bisher zwei getrennte Vorgänge). Wahlweise per manueller
 // Eingabe oder per Fotoerkennung (Tesseract.js OCR, läuft vollständig im
@@ -3737,7 +3676,6 @@ export function showCreatePatientRezeptView({ onLock, homeId, searchText = "" })
         <h3>Eingabe</h3>
         <button id="manualEntryBtn">Manuell eingeben</button>
         <button id="photoEntryBtn" class="secondary">📷 Rezept abfotografieren</button>
-        <button id="fileEntryBtn" class="secondary">📠 Fax/PDF hochladen</button>
       </div>
     `);
 
@@ -3746,7 +3684,6 @@ export function showCreatePatientRezeptView({ onLock, homeId, searchText = "" })
     };
     document.getElementById("manualEntryBtn").onclick = () => renderCombinedForm(null);
     document.getElementById("photoEntryBtn").onclick = () => renderCameraCapture();
-    document.getElementById("fileEntryBtn").onclick = () => renderFileUpload();
   }
 
   // Textfelder werden per Tesseract-OCR einzeln erkannt (siehe
@@ -3755,8 +3692,8 @@ export function showCreatePatientRezeptView({ onLock, homeId, searchText = "" })
   // ausgewertet (siehe unten), nicht per Text-OCR.
   const OCR_TEXT_FIELD_KEYS = ["name", "geburtsdatum", "ausstellungsdatum", "icd10", "diagnosengruppe", "leitsymptomatik", "heilmittel", "einheiten"];
 
-  // CSS für den Ausrichtungsrahmen (Kamera-Live-Vorschau und Datei-Upload-
-  // Vorschau nutzen exakt dieselbe Region, siehe MUSTER13_GUIDE_REGION).
+  // CSS für den Ausrichtungsrahmen in der Kamera-Live-Vorschau (siehe
+  // MUSTER13_GUIDE_REGION).
   function guideOverlayStyle() {
     const r = MUSTER13_GUIDE_REGION;
     return `position:absolute; top:${(r.y0 * 100).toFixed(1)}%; left:${(r.x0 * 100).toFixed(1)}%; width:${((r.x1 - r.x0) * 100).toFixed(1)}%; height:${((r.y1 - r.y0) * 100).toFixed(1)}%; border:3px dashed #22c55e; border-radius:8px; pointer-events:none;`;
@@ -3980,106 +3917,6 @@ export function showCreatePatientRezeptView({ onLock, homeId, searchText = "" })
           c.width = 0;
           c.height = 0;
         });
-      }
-    };
-  }
-
-  // Alternative zum Abfotografieren: ein bereits digital vorliegendes
-  // Rezept hochladen (z.B. ein per Fax empfangenes PDF, oder ein Scan/
-  // Foto als Bilddatei). Durchläuft dieselbe ROI-Feld-Erkennung wie die
-  // Kamera-Aufnahme (siehe runRoiOcrOnFormCanvas).
-  function renderFileUpload() {
-    stopCameraStream();
-    render(`
-      <div class="card">
-        <h2>Fax/PDF hochladen</h2>
-        <p class="muted">Die Datei wird nur im Browser verarbeitet und danach sofort verworfen. Sie verlässt zu keinem Zeitpunkt das Gerät.</p>
-        <p class="muted">Unterstützt: PDF (z.B. per Fax empfangenes Rezept) oder Bilddatei (JPG/PNG).</p>
-        <button id="backToModeBtn" class="secondary">Zurück</button>
-      </div>
-
-      <div class="card">
-        <button id="chooseFileBtn">Datei auswählen</button>
-        <input id="ocrFileInput" type="file" accept="application/pdf,image/*" style="display:none;">
-        <div id="ocrFilePreviewWrap" style="display:none; margin-top:12px;">
-          <div style="position:relative;">
-            <canvas id="ocrFilePreviewCanvas" style="width:100%; border-radius:12px; display:block; background:#fff;"></canvas>
-            <div id="ocrFileGuideOverlay" style="${guideOverlayStyle()}"></div>
-          </div>
-          <p class="muted" style="margin-top:8px;">Falls das Formular nicht ungefähr im gestrichelten Rahmen liegt, bitte stattdessen manuell eingeben.</p>
-          <button id="ocrFileRecognizeBtn" style="margin-top:4px;">Text erkennen</button>
-        </div>
-        <div id="ocrFileMsg" class="muted" style="margin-top:10px;"></div>
-      </div>
-    `);
-
-    document.getElementById("backToModeBtn").onclick = () => renderModeSelection();
-
-    const fileInput = document.getElementById("ocrFileInput");
-    const previewWrap = document.getElementById("ocrFilePreviewWrap");
-    const previewCanvas = document.getElementById("ocrFilePreviewCanvas");
-    const recognizeBtn = document.getElementById("ocrFileRecognizeBtn");
-    const msg = document.getElementById("ocrFileMsg");
-    let sourceCanvas = null;
-
-    document.getElementById("chooseFileBtn").onclick = () => fileInput.click();
-
-    fileInput.onchange = async () => {
-      const file = fileInput.files?.[0];
-      if (!file) return;
-
-      msg.className = "muted";
-      msg.textContent = "Datei wird geladen ...";
-      previewWrap.style.display = "none";
-      sourceCanvas = null;
-
-      try {
-        const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
-        sourceCanvas = isPdf ? await renderPdfFileToCanvas(file) : await renderImageFileToCanvas(file);
-
-        previewCanvas.width = sourceCanvas.width;
-        previewCanvas.height = sourceCanvas.height;
-        previewCanvas.getContext("2d").drawImage(sourceCanvas, 0, 0);
-
-        previewWrap.style.display = "block";
-        msg.textContent = "";
-      } catch (err) {
-        console.error("Datei konnte nicht gelesen werden:", err);
-        msg.className = "error";
-        msg.textContent = "Datei konnte nicht gelesen werden. Bitte eine andere Datei wählen oder manuell eingeben.";
-        sourceCanvas = null;
-      }
-    };
-
-    recognizeBtn.onclick = async () => {
-      if (!sourceCanvas) return;
-      recognizeBtn.disabled = true;
-      msg.className = "muted";
-      msg.textContent = "Text wird erkannt ...";
-
-      const guideRect = regionToPixelRect(MUSTER13_GUIDE_REGION, sourceCanvas.width, sourceCanvas.height);
-      const formCanvas = cropCanvasToRect(sourceCanvas, guideRect);
-
-      try {
-        const parsed = await runRoiOcrOnFormCanvas(formCanvas, (i, total) => {
-          msg.textContent = `Text wird erkannt ... (Feld ${i} von ${total})`;
-        });
-        renderCombinedForm(parsed);
-      } catch (err) {
-        console.error("OCR fehlgeschlagen:", err);
-        msg.className = "error";
-        msg.textContent = "Texterkennung fehlgeschlagen. Bitte manuell eingeben.";
-        recognizeBtn.disabled = false;
-      } finally {
-        // Datei-/Canvas-Daten sofort verwerfen, unabhängig vom Ergebnis.
-        [sourceCanvas, formCanvas].forEach((c) => {
-          if (!c) return;
-          const ctx = c.getContext("2d");
-          ctx.clearRect(0, 0, c.width, c.height);
-          c.width = 0;
-          c.height = 0;
-        });
-        sourceCanvas = null;
       }
     };
   }

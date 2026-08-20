@@ -1,12 +1,34 @@
 # FaSt App – Handoff Summary
-**Stand:** 2026-08-19 (Session-Ende, fünfte Session: Feldkoordinaten-Fix + Fax/PDF-Upload)
-**Branch:** `claude/fast-app-8-features-xep6yr` (in `/workspace/app-test`, lokal, **40 Commits, weiterhin nicht auf GitHub gepusht**)
+**Stand:** 2026-08-20 (Session-Ende, fünfte Session, inkl. Nutzer-Feedback-Runde: Fax/PDF-Upload entfernt, tägliches Viewer-Backup)
+**Branch:** `claude/fast-app-8-features-xep6yr` (in `/workspace/app-test`, lokal, **42 Commits, weiterhin nicht auf GitHub gepusht**)
 
 Diese Datei ersetzt die vorherige Version vom 2026-08-17 (vierte Session) vollständig.
 
 ---
 
-## -1. Diese Session (fünfte): Fax/PDF-Upload als Alternative zur Kamera-Aufnahme
+## 0. Nutzer-Feedback nach Abschnitt -1: Fax/PDF-Upload entfernt, tägliches PIN-geschütztes Viewer-Backup (Commit `9aa879a`)
+
+Nachdem der Nutzer die App getestet hat, kam folgende Rückmeldung: (1) der frisch gebaute Fax/PDF-Upload (Abschnitt -1) soll wieder raus, da empfangene Faxe in der Praxis oft verschoben/schlecht leserlich sind und der Upload dadurch keinen echten Mehrwert bringt; (2) es fehlt noch das tägliche automatische Backup für den separaten Offline-Viewer, das im Hintergrund per E-Mail an physio_fast@gmx.de gehen soll, mit einer JSON-Datei mit allen App-Daten, als ZIP verpackt und mit der PIN **1550** entsperrbar.
+
+**1. Fax/PDF-Upload entfernt:** `📠 Fax/PDF hochladen`-Button, `renderFileUpload()`, `loadPdfJsScript()`, `renderPdfFileToCanvas()`, `renderImageFileToCanvas()` aus `ui/views.js` entfernt, `vendor/pdfjs/` komplett gelöscht. Die Kamera-Aufnahme (`renderCameraCapture`) ist unverändert die einzige Fotoerkennung. `runRoiOcrOnFormCanvas()` und `guideOverlayStyle()` (DRY-Refaktorierungen aus Abschnitt -1) blieben erhalten, da sie weiterhin vom Kamera-Flow genutzt werden - keine Duplizierung musste rückgängig gemacht werden.
+
+**2. Tägliches Viewer-Backup umgebaut** (`modules/autoExport.js`, bereits als Grundgerüst seit Aufgabe 2/Funktion 8 vorhanden, jetzt an die neue Anforderung angepasst):
+- Ziel-E-Mail fest auf `physio_fast@gmx.de` (Konstante `AUTO_EXPORT_TARGET_EMAIL`) - bewusst getrennt von der "Büro-E-Mail-Adresse" in den Einstellungen, die weiterhin unverändert nur für Freikuvert-Bestellungen an eine andere Stelle genutzt wird.
+- Die versendete ZIP enthält jetzt **eine** Datei, `appData.json`, mit dem vollständigen, unverschlüsselten JSON-Stand aller App-Daten (`finalizeAppStructure(runtimeData)`) - statt wie zuvor `appData.enc`/`cryptoMeta.json`, die zusätzlich zum ZIP-Passwort noch das echte Praxispasswort zum Entschlüsseln benötigt hätten.
+- Die ZIP ist mit der PIN **1550** (Konstante `AUTO_EXPORT_ZIP_PIN`) entsperrbar, über die eingebaute Passwortverschlüsselung von zip.js.
+- Läuft weiterhin täglich (`AUTO_EXPORT_INTERVAL_DAYS = 1`) und ohne Rückfrage im Hintergrund direkt nach jedem Entsperren der App, wenn seit dem letzten Versand mindestens ein Tag vergangen ist.
+- **`viewer/index.html`** entsprechend angepasst: fragt jetzt eine PIN statt des Praxispassworts ab und liest `appData.json` direkt (kein AES-GCM/PBKDF2-Unwrap mehr nötig für diesen Export-Typ - der komplette Krypto-Abschnitt des Viewers entfiel dadurch ersatzlos).
+- Das manuelle "Backup exportieren/importieren" in den Einstellungen (`modules/backup.js`, weiterhin mit dem echten Praxispasswort, für die Wiederherstellung in der App selbst) ist davon **nicht** betroffen und bleibt unverändert.
+
+**Sicherheitshinweis (dem Nutzer mitgeteilt, bewusste Nutzerentscheidung):** Eine 4-stellige ZIP-PIN ist deutlich schwächer als ein richtiges Passwort und bei abgefangener E-Mail in vertretbarer Zeit per Brute-Force angreifbar. Das ist eine bewusste Abwägung zwischen einfacher Bedienbarkeit im Viewer und Schutzstärke, die der Nutzer explizit so gewünscht hat.
+
+**Getestet:** Fax/PDF-Entfernung mit den bestehenden Regressionstests bestätigt (Kamera-Flow weiterhin 7/7, sowie Rezept/Optimierer/Freikuvert/Zeit/Patientenliste/Dashboard je unverändert grün). Neuer Playwright-Test `smoketest_viewer_autoexport.mjs` (**10/10**) verifiziert das Viewer-Backup vollständig lokal (der EmailJS-Request wird per `page.route` abgefangen statt tatsächlich versendet, dadurch keine Abhängigkeit vom in dieser Sandbox blockierten Netzwerk): Ziel-E-Mail korrekt, ZIP enthält ausschließlich `appData.json`, falsche PIN schlägt beim Entpacken fehl, korrekte PIN liefert lesbares JSON mit allen App-Daten - inkl. eines zwischen zwei simulierten Tagen (Playwright-Uhr-Fast-Forward über die Tagesgrenze) angelegten Heims, um zu bestätigen, dass der zweite tägliche Export tatsächlich die neuen Daten enthält.
+
+---
+
+## -1. Vorherige Session-Runde (inzwischen wieder entfernt): Fax/PDF-Upload als Alternative zur Kamera-Aufnahme
+
+**Hinweis:** Diese Funktion wurde in Abschnitt 0 oben auf Nutzerwunsch wieder entfernt. Dieser Abschnitt bleibt nur als historische Dokumentation stehen.
 
 Nutzeranfrage: Therapeuten erhalten Rezepte teils digital (z.B. per Fax als PDF) statt auf Papier – ein direkter Datei-Upload sollte als Alternative zur Kamera-Aufnahme möglich sein, ohne die bestehende Muster-13-Feld-Erkennung zu duplizieren.
 
@@ -85,18 +107,18 @@ Alle Testskripte liegen unter `/tmp/claude-0/-home-user/a9e9d6a0-2415-56f0-be21-
 
 ## 3. Was noch aussteht
 
-1. **GitHub-Push weiterhin blockiert (403).** Unverändert. Alle 40 Commits liegen lokal bereit. Diese Session wieder die **komplette App** als ZIP bereitgestellt (nicht nur Änderungen), wie vom Nutzer als Standardvorgehen verlangt.
+1. **GitHub-Push weiterhin blockiert (403).** Unverändert. Alle 42 Commits liegen lokal bereit. Diese Session wieder die **komplette App** als ZIP bereitgestellt (nicht nur Änderungen), wie vom Nutzer als Standardvorgehen verlangt.
 
-2. **Echter Testlauf mit fotografiertem/hochgeladenem Muster-13-Formular fehlt weiterhin.** Die OCR-Sprachdaten-CDN ist in dieser Sandbox-Umgebung blockiert (`net::ERR_TUNNEL_CONNECTION_FAILED`/`Failed to fetch`), daher konnte die ROI-Erkennung – sowohl per Kamera als auch per neuem Datei-Upload – nur bis zur erwarteten Fehlermeldung getestet werden, nicht mit echtem, erkanntem Text (das PDF-Rendering selbst wurde davon unabhängig vollständig verifiziert, siehe Abschnitt -1). **Wichtigster nächster Schritt für den Nutzer:** ein echtes Muster-13-Rezept mit der App fotografieren UND/ODER als PDF hochladen und prüfen, ob (a) der Ausrichtungsrahmen intuitiv nutzbar ist, (b) die einzelnen Felder plausible Werte liefern, (c) die Feldkoordinaten in `modules/ocrRegions.js` nachjustiert werden müssen (z.B. wenn ein Feld systematisch leer bleibt oder falschen Text erwischt).
+2. **Echter Testlauf mit fotografiertem Muster-13-Formular fehlt weiterhin.** Die OCR-Sprachdaten-CDN ist in dieser Sandbox-Umgebung blockiert (`net::ERR_TUNNEL_CONNECTION_FAILED`/`Failed to fetch`), daher konnte die ROI-Erkennung per Kamera nur bis zur erwarteten Fehlermeldung getestet werden, nicht mit echtem, erkanntem Text. **Wichtigster nächster Schritt für den Nutzer:** ein echtes Muster-13-Rezept fotografieren und prüfen, ob (a) der Ausrichtungsrahmen intuitiv nutzbar ist, (b) die einzelnen Felder plausible Werte liefern, (c) die Feldkoordinaten in `modules/ocrRegions.js` nachjustiert werden müssen (z.B. wenn ein Feld systematisch leer bleibt oder falschen Text erwischt). Laut Rückmeldung des Nutzers ist dieser Test bereits im Gange ("die ocr Erkennung wird von mir weiter getestet").
 
-3. **Offene Punkte aus früheren Sessions** (unverändert, siehe deren Handoff-Versionen im Git-Verlauf):
-   - `AUTO_EXPORT_INTERVAL_DAYS` steht weiterhin auf `1` (täglich, zum Testen) – nach erfolgreichem Testbetrieb auf `28` zurücksetzen.
-   - `AUTO_EXPORT_TEST_PASSWORD` weiterhin eine Übergangslösung bis zum geplanten Viewer.
+3. **Tägliches Viewer-Backup: erste echte Zustellung noch nicht vom Nutzer bestätigt.** Der EmailJS-Versand konnte in dieser Sandbox nur durch Abfangen des Requests verifiziert werden (siehe Abschnitt 0), nicht durch eine tatsächlich zugestellte E-Mail. **Nächster Schritt für den Nutzer:** nach dem nächsten Entsperren der App (oder nach Ablauf eines Tages seit dem letzten Export) prüfen, ob eine E-Mail mit ZIP-Anhang bei physio_fast@gmx.de ankommt, und ob sich die ZIP mit der PIN 1550 im Viewer öffnen lässt.
+
+4. **Offene Punkte aus früheren Sessions** (unverändert, siehe deren Handoff-Versionen im Git-Verlauf):
    - 3 offene Code-Lücken (`updateHomeAddress`, `deleteDiagnoseZuordnung`, `createRezeptTimeEntry` – Funktionen ohne UI-Anbindung).
-   - DSGVO-Löschkonzept/Aufbewahrungsfristen und AVV-Prüfung mit EmailJS weiterhin organisatorisch/rechtlich zu klären.
+   - DSGVO-Löschkonzept/Aufbewahrungsfristen und AVV-Prüfung mit EmailJS weiterhin organisatorisch/rechtlich zu klären. Zusätzlich neu zu beachten: das tägliche Viewer-Backup verschickt jetzt unverschlüsselte Gesundheitsdaten (nur per 4-stelliger ZIP-PIN geschützt) per E-Mail – eine bewusste Nutzerentscheidung (siehe Abschnitt 0), aber ggf. bei der DSGVO-Prüfung zu berücksichtigen.
    - "FaSt-Button"-Thema aus einer früheren Aufgabe wurde auf Nutzerwunsch übersprungen.
 
-4. **Viewer-Session (separates Projekt).** Laut Nutzer folgt nach erfolgreichem Test des täglichen Exports eine separate Session für den lokalen PC-Viewer.
+5. **Viewer-Session (separates Projekt).** Laut Nutzer folgt nach erfolgreichem Test des täglichen Exports eine separate Session für den lokalen PC-Viewer. Der Viewer (`viewer/index.html`) liest das neue PIN-Format bereits, eine weitergehende Überarbeitung der Viewer-Oberfläche selbst steht laut Nutzer noch aus.
 
 ---
 
@@ -106,14 +128,15 @@ Repo: `/workspace/app-test` (GitHub: `alex-fast231/app-test`, Branch `claude/fas
 
 | Datei | Zweck |
 |---|---|
-| `data/schema.js` | `APP_VERSION` (aktuell 3.9.17, automatischer Bump bei jedem Commit) |
-| `modules/ocrRegions.js` | `MUSTER13_FIELD_REGIONS` (prozentuale Feldkoordinaten), `regionToPixelRect()`, `MUSTER13_GUIDE_ASPECT_RATIO`, **neu** `MUSTER13_GUIDE_REGION` (gemeinsame Rahmen-Position/-Größe für Kamera + Upload) |
+| `data/schema.js` | `APP_VERSION` (aktuell 3.9.19, automatischer Bump bei jedem Commit) |
+| `modules/ocrRegions.js` | `MUSTER13_FIELD_REGIONS` (prozentuale Feldkoordinaten), `regionToPixelRect()`, `MUSTER13_GUIDE_ASPECT_RATIO`, `MUSTER13_GUIDE_REGION` (Rahmen-Position/-Größe für die Kamera-Vorschau) |
 | `modules/ocr.js` | Feldbasierte Parser statt Gesamtblock-Heuristiken (siehe Abschnitt 1); Lymphdrainage-Dauer-Erkennung (MLD30/45/60) korrigiert |
 | `modules/ocrMarkDetection.js` | Kontrastanalyse für Hausbesuch-ja/nein-Erkennung |
-| `vendor/pdfjs/` | **Neu** – PDF.js v4.10.38 vendort, für Fax/PDF-Upload |
-| `ui/views.js` | Kamera-Erfassung (`renderCameraCapture`) und **neu** Datei-Upload (`renderFileUpload`) teilen sich `runRoiOcrOnFormCanvas()` (gemeinsame OCR-Pipeline) und `guideOverlayStyle()` (gemeinsamer Ausrichtungsrahmen); `renderCombinedForm` zeigt Diagnosegruppen-Hinweis und übernimmt erkanntes Hausbesuch-Ja/Nein |
+| `modules/autoExport.js` | **Umgebaut (Abschnitt 0)** – tägliches PIN-geschütztes (`1550`) Viewer-Backup (`appData.json` in ZIP) an feste Adresse `physio_fast@gmx.de`, statt des früheren doppelt-verschlüsselten Formats |
+| `modules/backup.js` | Unverändert – manuelles "Backup exportieren/importieren" in den Einstellungen, weiterhin mit dem echten Praxispasswort |
+| `ui/views.js` | Kamera-Erfassung (`renderCameraCapture`) mit `runRoiOcrOnFormCanvas()` (OCR-Pipeline) und `guideOverlayStyle()` (Ausrichtungsrahmen); `renderCombinedForm` zeigt Diagnosegruppen-Hinweis und übernimmt erkanntes Hausbesuch-Ja/Nein. Der Fax/PDF-Upload aus Abschnitt -1 wurde in Abschnitt 0 wieder entfernt. |
 | `.githooks/pre-commit` + `scripts/bump-version.js` | Automatischer Versions-Bump. Einmalige Einrichtung pro Klon: `git config core.hooksPath .githooks` |
-| `viewer/index.html` | Eigenständiger Offline-Viewer (wird in separater Session weitergebaut) |
+| `viewer/index.html` | **Umgebaut (Abschnitt 0)** – eigenständiger Offline-Viewer, liest jetzt PIN-geschützte `appData.json` statt praxispasswort-verschlüsselter Daten; UI/Feature-Umfang selbst unverändert (wird laut Nutzer in separater Session weitergebaut) |
 
 Zweites Repo `verordnungschecker-entwicklung`: unverändert.
 
@@ -122,7 +145,7 @@ Zweites Repo `verordnungschecker-entwicklung`: unverändert.
 ## 5. Empfohlener nächster Schritt für die neue Session
 
 1. GitHub-Push-Berechtigung klären, dann alle Commits pushen oder die bereitgestellte komplette-App-ZIP manuell einspielen lassen.
-2. **Vom Nutzer: echten Testlauf mit fotografiertem UND/ODER hochgeladenem Muster-13-Rezept durchführen** und Rückmeldung zu Erkennungsqualität/Feldkoordinaten einholen (siehe Abschnitt 3, Punkt 2) – das ist der wichtigste offene Punkt dieser Session.
-3. Bei Bedarf: Feldkoordinaten in `modules/ocrRegions.js` anhand der Rückmeldung nachjustieren.
+2. **Vom Nutzer: Rückmeldung zur laufenden OCR-Testphase einholen** (Kamera-Aufnahme, echtes Muster-13-Rezept) und bei Bedarf Feldkoordinaten in `modules/ocrRegions.js` nachjustieren (siehe Abschnitt 3, Punkt 2).
+3. **Vom Nutzer: bestätigen lassen, dass die tägliche Viewer-Backup-E-Mail bei physio_fast@gmx.de ankommt** und sich mit der PIN 1550 öffnen lässt (siehe Abschnitt 3, Punkt 3) – erste echte Zustellung außerhalb der Sandbox noch nicht bestätigt.
 4. Mit dem Nutzer die übrigen offenen Punkte aus Abschnitt 3 durchgehen.
-5. Warten auf die separate Viewer-Session.
+5. Warten auf die separate Viewer-Session (Weiterbau der Viewer-Oberfläche selbst).

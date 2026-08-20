@@ -46,91 +46,40 @@
 <body>
 <header>
   <h1>FaSt-Doku Viewer</h1>
-  <p>Läuft lokal, ohne Internetverbindung. Lädt verschlüsselte Export-Dateien aus der FaSt-Doku App ein.</p>
+  <p>Läuft lokal, ohne Internetverbindung. Lädt die täglichen, PIN-geschützten Backup-ZIPs aus der FaSt-Doku App ein.</p>
 </header>
 <main id="app"></main>
 
 <script src="./zip-full.min.js"></script>
 <script type="module">
 // ============================================================
-// Krypto (identische Logik wie crypto/crypto-engine.js +
-// crypto/key-management.js in der Haupt-App, hier bewusst
-// eigenständig kopiert, damit der Viewer ohne den Rest des
-// Repos funktioniert).
+// Export-Datei laden: die ZIP enthält eine einzige Datei (appData.json)
+// mit dem vollständigen, unverschlüsselten JSON-Stand aller App-Daten,
+// nur durch die ZIP-eigene Passwortverschlüsselung (mit der PIN) vor
+// zufälligem Mitlesen geschützt - siehe modules/autoExport.js in der
+// Haupt-App, das dieses Format täglich per E-Mail verschickt.
 // ============================================================
-function base64ToUint8(base64) {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-}
-function textToUint8(text) { return new TextEncoder().encode(text); }
-function uint8ToText(bytes) { return new TextDecoder().decode(bytes); }
-
-async function deriveKeyFromPassword(password, saltBytes) {
-  const keyMaterial = await crypto.subtle.importKey("raw", textToUint8(password), "PBKDF2", false, ["deriveKey"]);
-  return crypto.subtle.deriveKey(
-    { name: "PBKDF2", salt: saltBytes, iterations: 250000, hash: "SHA-256" },
-    keyMaterial,
-    { name: "AES-GCM", length: 256 },
-    false,
-    ["encrypt", "decrypt"]
-  );
-}
-
-async function decryptJSON(payload, cryptoKey) {
-  const iv = base64ToUint8(payload.ivBase64);
-  const cipherBytes = base64ToUint8(payload.cipherBase64);
-  const plainBuffer = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, cryptoKey, cipherBytes);
-  return JSON.parse(uint8ToText(new Uint8Array(plainBuffer)));
-}
-
-async function importKeyRaw(rawKeyBytes) {
-  return crypto.subtle.importKey("raw", rawKeyBytes, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
-}
-
-async function unwrapDataKeyWithPassword(wrappedPayload, password, passwordSaltBytes) {
-  const passwordKey = await deriveKeyFromPassword(password, passwordSaltBytes);
-  const result = await decryptJSON(
-    { ivBase64: wrappedPayload.ivBase64, cipherBase64: wrappedPayload.wrappedKeyBase64 },
-    passwordKey
-  );
-  return importKeyRaw(base64ToUint8(result.rawKeyBase64));
-}
-
-async function readExportFile(file, password) {
+async function readExportFile(file, pin) {
   const zipLib = window.zip;
   if (!zipLib) throw new Error("ZIP-Bibliothek nicht geladen.");
 
   const reader = new zipLib.ZipReader(new zipLib.BlobReader(file));
   try {
     const entries = await reader.getEntries();
-    const entryMap = new Map(entries.map((e) => [e.filename, e]));
+    const appEntry = entries.find((e) => e.filename === "appData.json");
 
-    const appEntry = entryMap.get("appData.enc");
-    const cryptoEntry = entryMap.get("cryptoMeta.json");
-    const metaEntry = entryMap.get("meta.json");
-
-    if (!appEntry || !cryptoEntry || !metaEntry) {
-      throw new Error("Datei ist keine gültige FaSt-Doku Exportdatei.");
+    if (!appEntry) {
+      throw new Error("Datei ist keine gültige FaSt-Doku Viewer-Exportdatei.");
     }
 
-    let encryptedAppData, cryptoMeta, meta;
+    let appData;
     try {
-      encryptedAppData = JSON.parse(await appEntry.getData(new zipLib.TextWriter(), { password }));
-      cryptoMeta = JSON.parse(await cryptoEntry.getData(new zipLib.TextWriter(), { password }));
-      meta = JSON.parse(await metaEntry.getData(new zipLib.TextWriter(), { password }));
+      appData = JSON.parse(await appEntry.getData(new zipLib.TextWriter(), { password: pin }));
     } catch {
-      throw new Error("Falsches Passwort oder beschädigte Datei.");
+      throw new Error("Falsche PIN oder beschädigte Datei.");
     }
 
-    const dataKey = await unwrapDataKeyWithPassword(
-      cryptoMeta.wrappedDataKeyByPassword,
-      password,
-      base64ToUint8(cryptoMeta.passwordSaltBase64)
-    );
-    const appData = await decryptJSON(encryptedAppData, dataKey);
-    return { appData, meta };
+    return { appData };
   } finally {
     await reader.close();
   }
@@ -503,8 +452,8 @@ function render() {
       <h2>Export-Datei laden</h2>
       <label for="fileInput">Export-ZIP (.zip)</label>
       <input id="fileInput" type="file" accept=".zip">
-      <label for="passwordInput">Praxispasswort</label>
-      <input id="passwordInput" type="password">
+      <label for="pinInput">PIN</label>
+      <input id="pinInput" type="password" inputmode="numeric" autocomplete="off">
       <div class="row">
         <button id="loadBtn">Datei laden</button>
       </div>
@@ -532,25 +481,25 @@ function render() {
 function bindEvents(therapists) {
   document.getElementById("loadBtn").onclick = async () => {
     const fileInput = document.getElementById("fileInput");
-    const passwordInput = document.getElementById("passwordInput");
+    const pinInput = document.getElementById("pinInput");
     const msg = document.getElementById("loadMsg");
     msg.className = "error";
     msg.textContent = "";
 
     const file = fileInput.files?.[0];
-    const password = passwordInput.value;
+    const pin = pinInput.value;
 
     if (!file) {
       msg.textContent = "Bitte eine Datei auswählen.";
       return;
     }
-    if (!password) {
-      msg.textContent = "Bitte das Praxispasswort eingeben.";
+    if (!pin) {
+      msg.textContent = "Bitte die PIN eingeben.";
       return;
     }
 
     try {
-      const { appData } = await readExportFile(file, password);
+      const { appData } = await readExportFile(file, pin);
       store = mergeAppDataIntoStore(store, appData);
       saveStore(store);
       uiState.expandedTherapist = appData.settings?.therapistId || null;

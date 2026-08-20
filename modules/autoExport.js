@@ -1,18 +1,29 @@
-import { exportBackup } from "./backup.js";
+import { finalizeAppStructure } from "../data/normalization.js";
 import { mutateRuntimeData, queuePersistRuntimeData } from "../core/app-core.js";
 
-// TEMPORÄR auf 1 Tag gesetzt, um den automatischen Export im laufenden
-// Testbetrieb zu prüfen. Nach abgeschlossenem Test wieder auf 28 (4 Wochen)
-// zurücksetzen.
+// Tägliches automatisches Backup für den separaten Offline-Viewer
+// (Vorgabe des Nutzers: "tägliches automatisches Backup für den Viewer").
 const AUTO_EXPORT_INTERVAL_DAYS = 1;
 const EMAILJS_ENDPOINT = "https://api.emailjs.com/api/v1.0/email/send";
 
-// TEMPORÄRES Testpasswort für die Verschlüsselung des automatischen Exports.
-// Bewusst getrennt vom Praxispasswort, damit eine abgefangene E-Mail auch
-// ohne Kenntnis des echten Praxispassworts nicht lesbar ist. Wird in einer
-// späteren Session durch ein vom Nutzer im Viewer festlegbares Passwort
-// ersetzt (siehe HANDOFF_SUMMARY.md).
-const AUTO_EXPORT_TEST_PASSWORD = "FaSt-AutoExport-Test-2026!";
+// Feste Ziel-E-Mail-Adresse für den täglichen Viewer-Export (Vorgabe des
+// Nutzers). Bewusst getrennt von der "Büro-E-Mail-Adresse" in den
+// Einstellungen, die für Freikuvert-Bestellungen an eine andere Stelle
+// genutzt wird - der tägliche Export soll unabhängig davon immer an diese
+// eine feste Adresse gehen, ohne dass der Therapeut sie erst konfigurieren
+// muss.
+const AUTO_EXPORT_TARGET_EMAIL = "physio_fast@gmx.de";
+
+// PIN, mit der die versendete ZIP-Datei im Viewer entsperrt werden kann
+// (Vorgabe des Nutzers: PIN 1550). Bewusst eine einfache, im Viewer
+// eingebbare PIN statt des Praxispassworts, damit die ZIP direkt mit dem
+// separaten Offline-Viewer geöffnet werden kann, ohne das Praxispasswort
+// preiszugeben. Die ZIP enthält dafür eine unverschlüsselte JSON-Kopie
+// aller App-Daten (kein zusätzlicher App-Schlüssel nötig) - anders als
+// beim manuellen "Backup exportieren" in den Einstellungen, das weiterhin
+// mit dem echten Praxispasswort arbeitet und für die Wiederherstellung in
+// der App selbst gedacht ist.
+const AUTO_EXPORT_ZIP_PIN = "1550";
 
 // Fest hinterlegte EmailJS-Zugangsdaten. Bewusst nicht in den Einstellungen
 // sichtbar/änderbar (Vorgabe: kein Therapeut soll diese sehen oder ändern
@@ -34,9 +45,46 @@ export function isAutoExportDue(data) {
   return daysSince >= AUTO_EXPORT_INTERVAL_DAYS;
 }
 
-export function isAutoExportConfigured(data) {
-  const bueroEmail = data?.settings?.buero?.email || "";
-  return !!bueroEmail;
+function requireZip() {
+  if (!globalThis.zip) {
+    throw new Error("ZIP Bibliothek ist nicht geladen");
+  }
+  return globalThis.zip;
+}
+
+function sanitizeFilenamePart(str) {
+  return String(str || "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/[^a-z0-9\-]/g, "")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+// Baut die tägliche Viewer-Export-ZIP: enthält eine einzige Datei
+// (appData.json) mit dem vollständigen, unverschlüsselten JSON-Stand
+// aller App-Daten - anders als das manuelle Backup keine appData.enc/
+// cryptoMeta.json, da der Viewer die Daten direkt (nur per ZIP-PIN
+// geschützt) lesen soll, ohne den Praxispasswort-Krypto-Stack der App zu
+// benötigen.
+async function buildViewerExportZip(runtimeData) {
+  const normalized = finalizeAppStructure(runtimeData);
+  const zipLib = requireZip();
+  const writer = new zipLib.ZipWriter(new zipLib.BlobWriter("application/zip"));
+  await writer.add(
+    "appData.json",
+    new zipLib.TextReader(JSON.stringify(normalized, null, 2)),
+    { password: AUTO_EXPORT_ZIP_PIN, encryptionStrength: 3 }
+  );
+
+  const blob = await writer.close();
+  const stamp = normalized.exportTimestamp.replace(/[:T]/g, "-").slice(0, 16);
+  const therapistSlug = sanitizeFilenamePart(normalized.settings?.therapistName) || "therapeut";
+  const filename = `FaSt-Doku-Viewer-Backup-${therapistSlug}-${stamp}.zip`;
+  return { blob, filename };
 }
 
 function blobToBase64DataUrl(blob) {
@@ -52,7 +100,7 @@ function blobToBase64DataUrl(blob) {
 // basierter E-Mail-Versand ohne eigenes Backend - siehe emailjs.com). Das
 // EmailJS-Template muss folgende Variablen verwenden: to_email, subject,
 // message, therapist_name, filename, attachment (als "Variable Attachment").
-async function sendExportViaEmailJs({ bueroEmail, therapistName, blob, filename }) {
+async function sendExportViaEmailJs({ therapistName, blob, filename }) {
   const attachmentDataUrl = await blobToBase64DataUrl(blob);
 
   const response = await fetch(EMAILJS_ENDPOINT, {
@@ -63,9 +111,9 @@ async function sendExportViaEmailJs({ bueroEmail, therapistName, blob, filename 
       template_id: EMAILJS_TEMPLATE_ID,
       user_id: EMAILJS_PUBLIC_KEY,
       template_params: {
-        to_email: bueroEmail,
-        subject: `FaSt-Doku Automatischer Export – ${therapistName || "Therapeut"}`,
-        message: `Automatischer Export von ${therapistName || "Therapeut"}. Enthält alle App-Daten, verschlüsselt mit dem Export-Passwort (nicht dem Praxispasswort).`,
+        to_email: AUTO_EXPORT_TARGET_EMAIL,
+        subject: `FaSt-Doku Viewer-Backup – ${therapistName || "Therapeut"}`,
+        message: `Automatisches tägliches Backup von ${therapistName || "Therapeut"} für den FaSt-Doku Viewer. Die ZIP-Datei ist mit einer PIN geschützt.`,
         therapist_name: therapistName || "",
         filename,
         attachment: attachmentDataUrl
@@ -99,34 +147,28 @@ function markAutoExportSent() {
 }
 
 // Wird beim App-Start (nach dem Entsperren) aufgerufen. Prüft, ob seit dem
-// letzten automatischen Export AUTO_EXPORT_INTERVAL_DAYS vergangen sind
-// (aktuell temporär 1 Tag für den Testbetrieb, regulär 4 Wochen), und
-// verschickt in diesem Fall im Hintergrund eine vollständige, mit
-// AUTO_EXPORT_TEST_PASSWORD verschlüsselte Kopie aller App-Daten
-// (identisches Format wie das manuelle Backup) an die Büro-E-Mail.
-// Läuft komplett ohne Rückfrage an den Therapeuten (Vorgabe: "ohne
-// Bestätigung"). Gibt bei Erfolg { sent: true } zurück, damit die UI eine
-// kurze stille Meldung ("Export gesendet") anzeigen kann.
+// letzten automatischen Export AUTO_EXPORT_INTERVAL_DAYS (täglich)
+// vergangen sind, und verschickt in diesem Fall im Hintergrund eine
+// vollständige, mit AUTO_EXPORT_ZIP_PIN geschützte JSON-Kopie aller
+// App-Daten an die feste Viewer-Backup-Adresse. Läuft komplett ohne
+// Rückfrage an den Therapeuten (Vorgabe: "ohne Bestätigung"). Gibt bei
+// Erfolg { sent: true } zurück, damit die UI eine kurze stille Meldung
+// ("Export gesendet") anzeigen kann.
 export async function runAutoExportIfDue(runtimeData) {
   if (!isAutoExportDue(runtimeData)) {
     return { sent: false, reason: "not_due" };
   }
 
-  if (!isAutoExportConfigured(runtimeData)) {
-    return { sent: false, reason: "not_configured" };
-  }
-
   try {
-    const result = await exportBackup(runtimeData, { overridePassword: AUTO_EXPORT_TEST_PASSWORD });
+    const result = await buildViewerExportZip(runtimeData);
     await sendExportViaEmailJs({
-      bueroEmail: runtimeData.settings.buero.email,
       therapistName: runtimeData.settings.therapistName,
       blob: result.blob,
       filename: result.filename
     });
 
     markAutoExportSent();
-    pushAutoExportHistory("sent", `Export "${result.filename}" gesendet an ${runtimeData.settings.buero.email}.`);
+    pushAutoExportHistory("sent", `Viewer-Backup "${result.filename}" gesendet an ${AUTO_EXPORT_TARGET_EMAIL}.`);
     await queuePersistRuntimeData();
     return { sent: true };
   } catch (err) {
