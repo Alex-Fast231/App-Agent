@@ -1,19 +1,17 @@
 FaSt-Doku – Vollständiger App-Stand für ein neues GitHub-Repo
 ================================================================
-Stand: 2026-08-20, fünfte Session (OCR-Region-of-Interest-Rückbau),
-Version 3.9.22
+Stand: 2026-08-22, sechste Session (8 vorgegebene Aufgaben komplett
+umgesetzt), Version 3.9.27
 
 Diese ZIP enthält den KOMPLETTEN, lauffähigen und getesteten Stand der
-App (alle 41 Dateien), direkt aus der getesteten Arbeitsumgebung
+App (alle 34 Dateien), direkt aus der getesteten Arbeitsumgebung
 exportiert. Kein Zusammenfügen mit älteren ZIPs nötig – einfach diese
 verwenden.
 
-Der Viewer wird jetzt separat als eigene Datei bereitgestellt (siehe
-Ihre vorherige Anfrage) - diese ZIP hier ist NUR die Haupt-App. Falls
-Sie den Viewer brauchen: bitte die separat verschickte
-FaSt-Doku-Viewer.zip verwenden (enthält index.html + zip-full.min.js).
-Der Vollständigkeit halber ist viewer/ trotzdem auch in dieser
-kompletten App-ZIP enthalten, da er Teil desselben Repos ist.
+Der Viewer wird wie gewünscht separat als eigene Datei bereitgestellt
+(FaSt-Doku-Viewer-v2.zip) - diese ZIP hier ist die Haupt-App. Der
+Vollständigkeit halber ist viewer/ trotzdem auch in dieser kompletten
+App-ZIP enthalten, da er Teil desselben Repos ist.
 
 So laden Sie ein neues GitHub-Repo hoch
 ------------------------------------------
@@ -44,19 +42,38 @@ Weiterentwicklung mit automatischer Versionserhöhung):
 
 Wenn Sie stattdessen ein BESTEHENDES Repo aktualisieren möchten:
 einfach alle Dateien aus dieser ZIP über die bestehenden Dateien im
-Repo kopieren/hochladen (überschreiben) und committen. Achtung: die
-Dateien "modules/ocrRegions.js" und "modules/ocrMarkDetection.js"
-existieren in dieser Version nicht mehr – falls sie in Ihrem
-bestehenden Repo noch vorhanden sind, bitte manuell löschen.
+Repo kopieren/hochladen (überschreiben) und committen. Achtung: der
+Ordner "vendor/tesseract" und die Datei "modules/ocr.js" existieren in
+dieser Version nicht mehr (Kamera/OCR wurde komplett entfernt) – falls
+sie in Ihrem bestehenden Repo noch vorhanden sind, bitte manuell
+löschen.
 
-Neu in dieser Version (gegenüber der letzten ZIP)
-----------------------------------------------------
-Die OCR-Fotoerkennung wurde auf Ihre Rückmeldung hin zurückgebaut:
-statt die einzelnen Formularfelder per Ausrichtungsrahmen und
-Feld-für-Feld-Zuschnitt zu erkennen, wird beim Fotografieren jetzt
-wieder EIN Tesseract-Durchlauf über das komplette Foto gemacht (wie
-vor der Feld-für-Feld-Umstellung). Kein Ausrichtungsrahmen mehr in der
-Kamera-Vorschau. Details siehe HANDOFF_SUMMARY.md, Abschnitt "0b".
+Neu in dieser Version (gegenüber der letzten ZIP) – die 8 Aufgaben
+----------------------------------------------------------------------
+1. OCR/Kamera komplett entfernt – nur noch manuelle Eingabe beim
+   Anlegen von Patient + Rezept.
+2. Arzt-Autocomplete: Beim Tippen im Arzt-Feld erscheint jetzt
+   zuverlässig ein Dropdown mit passenden, bereits gespeicherten
+   Ärzten; Auswahl füllt Adresse/PLZ/Ort automatisch aus.
+3. Automatische Punktsetzung funktioniert jetzt auch beim zweiten
+   ICD-10-Feld.
+4. Der tägliche automatische Backup-Versand prüft jetzt nach
+   Kalendertagen (Mitternacht), nicht mehr nach vollen 24 Stunden seit
+   dem letzten Versand. Kurzer Hinweis "Daten abgeschickt" nach
+   erfolgtem Versand (nur für den aktuellen Testbetrieb).
+5. Im Assessment-Einstieg gibt es jetzt einen Button "Letztes
+   Assessment ansehen", falls für den Patienten bereits eines
+   durchgeführt wurde.
+6. Therapiebericht überarbeitet: automatische Einleitung mit
+   Patientendaten, alle bisherigen Assessments statt nur des letzten,
+   zwei neue Fragen (Therapie weiterführen? / Nutzen?), und ein
+   Schnellzugriff-Button "Arztbericht" direkt in der Patientenliste.
+   Dafür neues Patientenfeld "Anrede" beim Anlegen.
+7. Viewer überarbeitet (siehe separate FaSt-Doku-Viewer-v2.zip): PIN-
+   Sperre beim Öffnen, neue Tabs "Kilometer" und "Abgabelisten".
+8. App-Name im Header von "FaSt-Doku" auf "FaSt App" geändert.
+
+Details siehe HANDOFF_SUMMARY.md, Abschnitt "6".
 
 Deployment (z.B. Netlify)
 --------------------------

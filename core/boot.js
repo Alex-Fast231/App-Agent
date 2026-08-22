@@ -98,7 +98,10 @@ function handleUnlocked() {
 }
 
 // Läuft still im Hintergrund, ohne die UI zu blockieren oder den
-// Therapeuten um Bestätigung zu bitten (Vorgabe Funktion 8).
+// Therapeuten um Bestätigung zu bitten (Vorgabe Funktion 8). Der kurze
+// Hinweis "Daten abgeschickt" ist bewusst nur für den aktuellen Testbetrieb
+// gedacht (Vorgabe des Nutzers) und kann später wieder entfernt werden,
+// sobald der tägliche Versand zuverlässig bestätigt ist.
 function triggerAutoExportIfDue() {
   const runtimeData = getRuntimeData();
   if (!runtimeData) return;
@@ -106,7 +109,7 @@ function triggerAutoExportIfDue() {
   runAutoExportIfDue(runtimeData)
     .then((result) => {
       if (result?.sent) {
-        showToast("Export gesendet");
+        showToast("Daten abgeschickt");
       }
     })
     .catch((err) => console.error("Automatischer Export fehlgeschlagen:", err));

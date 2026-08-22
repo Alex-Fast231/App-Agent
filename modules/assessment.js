@@ -364,6 +364,17 @@ export const VERLAUF_OPTIONEN = [
   { val: "verschlechtert", label: "Verschlechtert" }
 ];
 
+export const THERAPIE_WEITERFUEHREN_OPTIONEN = [
+  { val: "ja", label: "Ja" },
+  { val: "nein", label: "Nein" }
+];
+
+export const THERAPIE_NUTZEN_OPTIONEN = [
+  { val: "ja", label: "Ja" },
+  { val: "nein", label: "Nein" },
+  { val: "teilweise", label: "Teilweise" }
+];
+
 export function ampelEmoji(ampel) {
   if (ampel === "gruen") return "🟢";
   if (ampel === "gelb") return "🟡";

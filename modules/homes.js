@@ -696,6 +696,7 @@ export function createPatient(homeId, payload) {
       patientId,
       firstName: (payload.firstName || "").trim(),
       lastName: (payload.lastName || "").trim(),
+      anrede: ["frau", "herr"].includes(payload.anrede) ? payload.anrede : "",
       birthDate: (payload.birthDate || "").trim(),
       befreit: !!payload.befreit,
       hb: !!payload.hb,

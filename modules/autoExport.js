@@ -2,7 +2,10 @@ import { finalizeAppStructure } from "../data/normalization.js";
 import { mutateRuntimeData, queuePersistRuntimeData } from "../core/app-core.js";
 
 // Tägliches automatisches Backup für den separaten Offline-Viewer
-// (Vorgabe des Nutzers: "tägliches automatisches Backup für den Viewer").
+// (Vorgabe des Nutzers: "tägliches automatisches Backup für den Viewer",
+// nach abgeschlossenem Testbetrieb auf alle 4 Wochen umzustellen - dann
+// hier einfach auf 28 ändern, die Kalendertag-Zählung in
+// isAutoExportDue() funktioniert unverändert für jeden Intervallwert).
 const AUTO_EXPORT_INTERVAL_DAYS = 1;
 const EMAILJS_ENDPOINT = "https://api.emailjs.com/api/v1.0/email/send";
 
@@ -34,6 +37,25 @@ const EMAILJS_SERVICE_ID = "service_85uo2dr";
 const EMAILJS_TEMPLATE_ID = "template_ffghrgk";
 const EMAILJS_PUBLIC_KEY = "nVDBHTKSRFftRdE9v";
 
+function toLocalDateKey(date) {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+// Zählt volle Kalendertage zwischen zwei Zeitpunkten (lokale Zeitzone),
+// nicht volle 24-Stunden-Intervalle - damit ein Export z.B. um 23:50 Uhr
+// und der nächste um 00:10 Uhr (nur 20 Minuten später, aber nach
+// Mitternacht) bereits als "neuer Tag" zählt. Entspricht der Vorgabe
+// "Zählung nach Mitternacht - neue E-Mail am nächsten Tag sobald App
+// geöffnet" statt eines starren 24h-Countdowns ab dem letzten Versand.
+function daysBetweenLocalDates(earlier, later) {
+  const a = new Date(earlier.getFullYear(), earlier.getMonth(), earlier.getDate());
+  const b = new Date(later.getFullYear(), later.getMonth(), later.getDate());
+  return Math.round((b.getTime() - a.getTime()) / (1000 * 60 * 60 * 24));
+}
+
 export function isAutoExportDue(data) {
   const lastAt = data?.ui?.lastAutoExportAt;
   if (!lastAt) return true;
@@ -41,8 +63,7 @@ export function isAutoExportDue(data) {
   const lastDate = new Date(lastAt);
   if (Number.isNaN(lastDate.getTime())) return true;
 
-  const daysSince = Math.floor((Date.now() - lastDate.getTime()) / (1000 * 60 * 60 * 24));
-  return daysSince >= AUTO_EXPORT_INTERVAL_DAYS;
+  return daysBetweenLocalDates(lastDate, new Date()) >= AUTO_EXPORT_INTERVAL_DAYS;
 }
 
 function requireZip() {

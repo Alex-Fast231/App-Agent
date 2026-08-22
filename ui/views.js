@@ -91,7 +91,6 @@ import {
 import * as Assessment from "../modules/assessment.js";
 import * as AssessmentInfo from "../modules/assessmentInfo.js";
 import { exportBackup, importBackup, downloadBlob, validateBackupZip } from "../modules/backup.js";
-import { parseRezeptOcrText } from "../modules/ocr.js";
 import { generateId, formatPatientName } from "../core/utils.js";
 import {
   normalizeDeDateInput,
@@ -1205,17 +1204,118 @@ function renderArztAdresseFields(adresse) {
   `;
 }
 
+// Füllt Straße/PLZ/Ort automatisch aus, sobald der eingegebene Arztname
+// exakt einem bereits gespeicherten Arzt entspricht, UND zeigt zusätzlich
+// ein eigenes Dropdown mit passenden Ärzten, sobald getippt wird. Ein
+// eigenes Dropdown statt (nur) der nativen <datalist> des Feldes, weil
+// natives Datalist-Verhalten auf mobilen Browsern (v.a. iOS Safari, auf
+// Tablets/Handys in der Praxis der Hauptanwendungsfall) unzuverlässig
+// bis gar nicht angezeigt wird.
 function bindArztAdresseAutofill(arztInput, arztRegistry) {
   const strasseInput = document.getElementById("arztStrasse");
   const plzInput = document.getElementById("arztPlz");
   const ortInput = document.getElementById("arztOrt");
-  arztInput.addEventListener("input", () => {
-    const match = arztRegistry.find((a) => a.name === arztInput.value.trim());
+
+  function fillAddressFor(name) {
+    const match = arztRegistry.find((a) => a.name === name);
     const parts = splitArztAdresse(match?.adresse || "");
     strasseInput.value = parts.strasse;
     plzInput.value = parts.plz;
     ortInput.value = parts.ort;
+  }
+
+  // position:fixed mit per Hand berechneten Koordinaten statt einer
+  // relativ positionierten Elternstruktur - so ist die Platzierung
+  // unabhängig davon, wo im Formular das Feld gerade steht, und muss
+  // nicht auf das umgebende Markup (z.B. eine .card mit Innenabstand)
+  // Rücksicht nehmen. Als Kind von #app statt document.body angehängt,
+  // damit render() (app.innerHTML = ...) es beim nächsten Rendern
+  // automatisch mit entfernt - sonst würde bei jedem erneuten Aufruf
+  // dieser Ansicht ein weiteres, verwaistes Dropdown-Element im DOM
+  // liegen bleiben.
+  const dropdown = document.createElement("div");
+  dropdown.className = "arzt-suggestion-dropdown";
+  dropdown.style.cssText = "position:fixed; z-index:200; background:var(--card); border:1px solid var(--border); border-radius:10px; max-height:220px; overflow-y:auto; display:none; box-shadow:0 6px 20px rgba(15,23,42,0.12);";
+  app.appendChild(dropdown);
+
+  // Klappt das Dropdown nach oben statt nach unten auf, wenn unterhalb
+  // des Eingabefelds nicht genug Platz im sichtbaren Bereich ist (z.B.
+  // Feld weit unten im Formular auf einem kleinen Bildschirm) - sonst
+  // würde das Dropdown teilweise oder ganz außerhalb des Viewports
+  // erscheinen und wäre nicht erreichbar (position:fixed folgt der
+  // Seite beim Scrollen nicht, ein Herunterscrollen würde es also nicht
+  // sichtbar machen).
+  const DROPDOWN_MAX_HEIGHT = 220;
+  function positionDropdown() {
+    const rect = arztInput.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - rect.bottom;
+
+    dropdown.style.left = `${rect.left}px`;
+    dropdown.style.width = `${rect.width}px`;
+
+    if (spaceBelow < DROPDOWN_MAX_HEIGHT && rect.top > spaceBelow) {
+      dropdown.style.top = "";
+      dropdown.style.bottom = `${window.innerHeight - rect.top + 4}px`;
+    } else {
+      dropdown.style.bottom = "";
+      dropdown.style.top = `${rect.bottom + 4}px`;
+    }
+  }
+
+  function renderDropdown() {
+    const query = arztInput.value.trim().toLowerCase();
+    const matches = query ? arztRegistry.filter((a) => a.name.toLowerCase().includes(query)).slice(0, 8) : [];
+
+    if (matches.length === 0) {
+      dropdown.style.display = "none";
+      dropdown.innerHTML = "";
+      return;
+    }
+
+    positionDropdown();
+    dropdown.innerHTML = matches.map((a) => `
+      <div class="arzt-suggestion-item" data-name="${escapeHtml(a.name)}" style="padding:10px 12px; cursor:pointer; border-bottom:1px solid var(--border);">${escapeHtml(a.name)}</div>
+    `).join("");
+    dropdown.style.display = "block";
+
+    dropdown.querySelectorAll(".arzt-suggestion-item").forEach((el) => {
+      // mousedown statt click, damit preventDefault greift, bevor das
+      // Eingabefeld durch den Klick den Fokus verliert (blur würde das
+      // Dropdown sonst schon vor dem Klick-Handler schließen).
+      el.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        const name = el.dataset.name;
+        arztInput.value = name;
+        fillAddressFor(name);
+        dropdown.style.display = "none";
+      });
+    });
+  }
+
+  arztInput.addEventListener("input", () => {
+    fillAddressFor(arztInput.value.trim());
+    renderDropdown();
   });
+  arztInput.addEventListener("focus", renderDropdown);
+  arztInput.addEventListener("blur", () => {
+    setTimeout(() => { dropdown.style.display = "none"; }, 150);
+  });
+
+  // position:fixed folgt dem Eingabefeld nicht automatisch beim Scrollen
+  // eines umgebenden Containers (nur beim Scrollen des Viewports selbst) -
+  // auf einem langen Formular muss die Position deshalb bei jedem Scroll
+  // neu berechnet werden, sonst driftet das Dropdown vom Eingabefeld weg.
+  // Entfernt sich selbst wieder, sobald das Eingabefeld (nach dem nächsten
+  // render()) nicht mehr im DOM hängt - window-Listener werden sonst bei
+  // jedem erneuten Aufruf dieser Funktion dauerhaft angehäuft.
+  function onWindowScroll() {
+    if (!document.body.contains(arztInput)) {
+      window.removeEventListener("scroll", onWindowScroll, true);
+      return;
+    }
+    if (dropdown.style.display === "block") positionDropdown();
+  }
+  window.addEventListener("scroll", onWindowScroll, true);
 }
 
 function collectArztAdresseFromForm() {
@@ -1770,6 +1870,41 @@ function ensureDoctorReportsState(rezept) {
   return rezept.doctorReports;
 }
 
+// Legt einen neuen, leeren Arztbericht für ein Rezept an und gibt dessen
+// reportId zurück - gemeinsam genutzt vom bisherigen Weg (Einrichtung ->
+// Patient -> Arztbericht-Bereich -> Rezept auswählen) und dem neuen
+// Schnellzugriff-Button in der Patientenliste, damit die Erzeugungslogik
+// nicht doppelt gepflegt werden muss.
+function createDoctorReportForRezept(homeId, patientId, rezeptId) {
+  let createdReportId = "";
+  mutateRuntimeData((data) => {
+    const home = getHomeById(data, homeId);
+    const patient = getPatientById(home, patientId);
+    const rezept = getRezeptById(patient, rezeptId);
+    if (!patient || !rezept) throw new Error("Rezept nicht gefunden");
+    const reports = ensureDoctorReportsState(rezept);
+    const now = new Date().toISOString();
+    createdReportId = `report_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    reports.unshift({
+      reportId: createdReportId,
+      content: "",
+      therapieziele: [],
+      therapiezielFreitext: "",
+      compliance: "",
+      complianceFreitext: "",
+      verlauf: "",
+      verlaufFreitext: "",
+      therapieWeiterfuehren: "",
+      therapieNutzen: "",
+      therapieText: "",
+      bemerkungen: "",
+      createdAt: now,
+      updatedAt: now
+    });
+  });
+  return createdReportId;
+}
+
 // Teil 1 des Therapieberichts (automatisch): letztes Assessment mit
 // Ampel/Delta zum Vorwert, z.B. "Barthel-Index: 65/100 🟡 (Vorwert: 75/100, -10 Punkte)".
 function buildAssessmentSummaryLines(patient) {
@@ -1810,6 +1945,52 @@ function getPracticeHeaderLines(settings = {}) {
   return lines;
 }
 
+// Feste Einleitung des Therapieberichts, automatisch mit Patientendaten
+// befüllt (Vorgabe Aufgabe 6). "der/die" bleibt bewusst ungegendert
+// stehen, wie in der Nutzervorgabe wörtlich vorgegeben - nur die vier
+// markierten Platzhalter werden ersetzt.
+function buildDoctorReportIntroLine(patient) {
+  const anredeArzt = "Sehr geehrte Damen und Herren";
+  const anredePatient = patient?.anrede === "frau" ? "Frau " : patient?.anrede === "herr" ? "Herrn " : "";
+  const patientName = formatPatientName(patient) || "";
+  const geburtsdatum = patient?.birthDate || "—";
+
+  return `${anredeArzt}, vielen Dank für die Heilmittelverordnung für ${anredePatient}${patientName}, geboren am ${geburtsdatum}, der/die bei uns in Behandlung ist. Um Sie über den aktuellen Stand der Therapie auf dem Laufenden zu halten, übermitteln wir Ihnen folgenden Bericht.`;
+}
+
+// Zeigt ALLE bisher durchgeführten Assessments eines Patienten (nicht nur
+// das letzte) mit Ampel/Delta zum jeweiligen Vorwert - Vorgabe Aufgabe 6
+// ("Alle Assessments anzeigen"). Analog zu renderAssessmentHistorySection,
+// aber ohne <details>-Akkordeon, da eingeklappte <details>-Inhalte beim
+// Drucken/PDF-Export je nach Browser nicht mit ausgegeben werden.
+function buildAllAssessmentsReportHtml(patient) {
+  const assessments = [...(patient?.assessments || [])]
+    .filter((a) => a.barthel || a.neuro || a.ortho || a.schwerst || a.nrs !== null)
+    .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+
+  if (assessments.length === 0) return `<div>Kein Assessment durchgeführt</div>`;
+
+  return assessments.map((a, idx) => {
+    const previous = assessments[idx + 1] || null;
+    const scores = extractAssessmentScores(a);
+    const prevScores = previous ? extractAssessmentScores(previous) : [];
+
+    const lines = scores.map((s) => {
+      const prev = prevScores.find((p) => p.key === s.key);
+      const ampel = prev ? Assessment.computeAmpel({ current: s.value, previous: prev.value, max: s.max, direction: s.direction }) : null;
+      const deltaText = prev ? ` (Vorwert: ${prev.value}${s.unit || ""}, ${s.value - prev.value >= 0 ? "+" : ""}${(s.value - prev.value).toFixed(s.unit ? 1 : 0)}${s.unit || ""})` : "";
+      return `<div>${Assessment.ampelEmoji(ampel)} ${escapeHtml(s.label)}: ${s.value}${s.max ? `/${s.max}` : s.unit || ""}${escapeHtml(deltaText)}</div>`;
+    }).join("");
+
+    return `
+      <div style="margin-bottom:10px;">
+        <div style="font-weight:600;">${escapeHtml(formatDeDate(a.date))}</div>
+        ${lines || '<div class="muted">Keine auswertbaren Ergebnisse.</div>'}
+      </div>
+    `;
+  }).join("");
+}
+
 function formatDoctorReportBodyHtml(content = "") {
   const labels = [
     'Stand der Therapie:',
@@ -1835,11 +2016,14 @@ function renderDoctorReportPrintHtml({ settings = {}, patient = {}, rezept = {},
   const headerLines = getPracticeHeaderLines(settings);
   const createdDate = formatIsoDateShort(report?.createdAt);
   const patientName = formatPatientName(patient) || 'Patient/in';
-  const assessmentSummary = buildAssessmentSummaryLines(patient);
+  const introLine = buildDoctorReportIntroLine(patient);
+  const allAssessmentsHtml = buildAllAssessmentsReportHtml(patient);
 
   const therapieziele = [...(report?.therapieziele || []), report?.therapiezielFreitext].filter(Boolean).join(", ");
   const complianceLabel = Assessment.COMPLIANCE_OPTIONEN.find((o) => o.val === report?.compliance)?.label || "";
   const verlaufLabel = Assessment.VERLAUF_OPTIONEN.find((o) => o.val === report?.verlauf)?.label || "";
+  const weiterfuehrenLabel = Assessment.THERAPIE_WEITERFUEHREN_OPTIONEN.find((o) => o.val === report?.therapieWeiterfuehren)?.label || "";
+  const nutzenLabel = Assessment.THERAPIE_NUTZEN_OPTIONEN.find((o) => o.val === report?.therapieNutzen)?.label || "";
   const legacyBodyHtml = report?.content ? formatDoctorReportBodyHtml(report.content) : "";
 
   return `
@@ -1873,19 +2057,20 @@ function renderDoctorReportPrintHtml({ settings = {}, patient = {}, rezept = {},
         Ihre Verordnung vom ${escapeHtml(rezept?.ausstell || '—')}
       </div>
 
+      <div class="doctor-report-section doctor-report-body">${escapeHtml(introLine)}</div>
+
       <div class="doctor-report-section">
         <h4>Assessment-Verlauf</h4>
-        ${assessmentSummary ? `
-          <div class="muted" style="font-size:12px;margin-bottom:4px;">Stand: ${escapeHtml(formatDeDate(assessmentSummary.date))}</div>
-          ${assessmentSummary.lines.map((l) => `<div>${Assessment.ampelEmoji(l.ampel)} ${escapeHtml(l.text)}${l.deltaText ? ` (${escapeHtml(l.deltaText)})` : ''}</div>`).join('')}
-        ` : `<div>Kein Assessment durchgeführt</div>`}
+        ${allAssessmentsHtml}
       </div>
 
-      ${therapieziele || complianceLabel || verlaufLabel ? `
+      ${therapieziele || complianceLabel || verlaufLabel || weiterfuehrenLabel || nutzenLabel ? `
         <div class="doctor-report-section">
           ${therapieziele ? `<div><strong>Therapieziel:</strong> ${escapeHtml(therapieziele)}</div>` : ''}
           ${complianceLabel ? `<div><strong>Patientencompliance:</strong> ${escapeHtml(complianceLabel)}${report?.complianceFreitext ? ` – ${escapeHtml(report.complianceFreitext)}` : ''}</div>` : ''}
           ${verlaufLabel ? `<div><strong>Verlauf:</strong> ${escapeHtml(verlaufLabel)}${report?.verlaufFreitext ? ` – ${escapeHtml(report.verlaufFreitext)}` : ''}</div>` : ''}
+          ${weiterfuehrenLabel ? `<div><strong>Therapie weiterführen:</strong> ${escapeHtml(weiterfuehrenLabel)}</div>` : ''}
+          ${nutzenLabel ? `<div><strong>Therapie bringt Nutzen:</strong> ${escapeHtml(nutzenLabel)}</div>` : ''}
         </div>
       ` : ''}
 
@@ -1975,7 +2160,7 @@ export function showSetupView({ onSuccess }) {
   render(`
     <div class="card">
       <h2>Ersteinrichtung</h2>
-      <p class="muted">FaSt-Doku wird jetzt mit Praxispasswort und PIN abgesichert.</p>
+      <p class="muted">FaSt App wird jetzt mit Praxispasswort und PIN abgesichert.</p>
 
       <label for="therapistName">Therapeutenname</label>
       <input id="therapistName" type="text" autocomplete="off">
@@ -2131,7 +2316,7 @@ export function showLoginView({ onSuccess }) {
   render(`
     <div class="card">
       <h2>PIN Login</h2>
-      <p class="muted">Bitte PIN eingeben, um FaSt-Doku zu entsperren.</p>
+      <p class="muted">Bitte PIN eingeben, um FaSt App zu entsperren.</p>
 
       <label for="loginPin">PIN</label>
       <input id="loginPin" type="password" inputmode="numeric" autocomplete="current-password">
@@ -2976,6 +3161,9 @@ export function showPatientenListeView({ onLock, searchText = "" } = {}) {
               <button class="openPatientFromListeBtn secondary" data-home-id="${escapeHtml(homeId)}" data-patient-id="${escapeHtml(patient.patientId)}">Rezept</button>
               <button class="openOptimierungFromListeBtn secondary" data-home-id="${escapeHtml(homeId)}" data-patient-id="${escapeHtml(patient.patientId)}">Rezeptoptimierer</button>
             </div>
+            <div class="inline-action-stack" style="margin-top:8px;">
+              <button class="openArztberichtFromListeBtn secondary" data-home-id="${escapeHtml(homeId)}" data-patient-id="${escapeHtml(patient.patientId)}">Arztbericht</button>
+            </div>
           </div>
         `).join("")}
       </div>
@@ -3003,6 +3191,15 @@ export function showPatientenListeView({ onLock, searchText = "" } = {}) {
   document.querySelectorAll(".openOptimierungFromListeBtn").forEach((btn) => {
     btn.onclick = () => {
       showRezeptoptimierungView({ onLock, homeId: btn.dataset.homeId, patientId: btn.dataset.patientId });
+    };
+  });
+
+  // Schnellzugriff: Dashboard -> Patienten -> Patient -> "Arztbericht" -
+  // ersetzt den bisherigen Umweg über die Einrichtung (Einrichtung ->
+  // Patient -> Arztbericht-Bereich -> Rezept auswählen).
+  document.querySelectorAll(".openArztberichtFromListeBtn").forEach((btn) => {
+    btn.onclick = () => {
+      showArztberichtView({ onLock, homeId: btn.dataset.homeId, patientId: btn.dataset.patientId, searchText });
     };
   });
 }
@@ -3073,7 +3270,6 @@ export function showHomeDetailView({ onLock, homeId, searchText = "" }) {
                 </div>
                 <div class="inline-action-stack" style="margin-bottom:12px;">
                   <button class="patientSectionBtn secondary" data-target="patient-schnelldoku-${patient.patientId}">SchnellDoku</button>
-                  <button class="patientSectionBtn secondary" data-target="patient-arztbericht-${patient.patientId}">Arztbericht</button>
                 </div>
 
                 <div id="patient-rezepte-${patient.patientId}" class="patient-inline-section" style="display:none; margin-bottom:12px;">
@@ -3146,50 +3342,6 @@ export function showHomeDetailView({ onLock, homeId, searchText = "" }) {
                   </div>
                   <button class="saveQuickDocBtn" data-patient-id="${patient.patientId}" ${quickDocRezepte.length===0?'disabled':''}>SchnellDoku speichern</button>
                   <div id="quickDocMsg-${patient.patientId}"></div>
-                </div>
-
-                <div id="patient-arztbericht-${patient.patientId}" class="patient-inline-section" style="display:none; margin-bottom:12px;">
-                  ${rezepte.length === 0 ? `<p class="muted">Keine Rezepte für Arztberichte vorhanden.</p>` : `
-                    <div class="list-stack">
-                      ${rezepte.map(rezept => {
-                        const reportCount = ensureDoctorReportsState(rezept).length;
-                        const reports = [...ensureDoctorReportsState(rezept)].sort((a, b) => String(b?.createdAt || '').localeCompare(String(a?.createdAt || '')));
-                        return `
-                          <details class="accordion" style="margin-bottom:8px;">
-                            <summary>
-                              <span>${escapeHtml(rezeptSummary(rezept))}</span>
-                              <span class="muted">${reportCount} Bericht(e)</span>
-                            </summary>
-                            <div class="accordion-body">
-                              <div class="compact-meta" style="margin-bottom:10px;">
-                                Arzt: ${escapeHtml(rezept.arzt || '—')}<br>
-                                Ausstellung: ${escapeHtml(rezept.ausstell || '—')}<br>
-                                Aktuelles Datum wird beim Anlegen automatisch gesetzt.
-                              </div>
-                              <div class="row" style="margin-bottom:10px;">
-                                <button class="createDoctorReportBtn" data-patient-id="${patient.patientId}" data-rezept-id="${rezept.rezeptId}">Neuen Arztbericht erstellen</button>
-                              </div>
-                              ${reports.length === 0 ? `<p class="muted">Noch keine Arztberichte gespeichert.</p>` : `
-                                <div class="list-stack">
-                                  ${reports.map(report => `
-                                    <div class="compact-card" style="padding:14px;">
-                                      <div class="row" style="justify-content:space-between; align-items:center; gap:10px; margin-bottom:8px;">
-                                        <div>
-                                          <div style="font-weight:700;">${escapeHtml(formatIsoDateShort(report.createdAt))}</div>
-                                          <div class="compact-meta">Zuletzt geändert: ${escapeHtml(formatIsoDateShort(report.updatedAt || report.createdAt))}</div>
-                                        </div>
-                                        <button class="openDoctorReportBtn secondary" data-patient-id="${patient.patientId}" data-rezept-id="${rezept.rezeptId}" data-report-id="${report.reportId}">Öffnen</button>
-                                      </div>
-                                    </div>
-                                  `).join('')}
-                                </div>
-                              `}
-                            </div>
-                          </details>
-                        `;
-                      }).join('')}
-                    </div>
-                  `}
                 </div>
 
                 <div id="patient-stammdaten-${patient.patientId}" class="patient-inline-section" style="display:none;">
@@ -3339,62 +3491,6 @@ export function showHomeDetailView({ onLock, homeId, searchText = "" }) {
     };
   });
 
-  document.querySelectorAll('.createDoctorReportBtn').forEach((btn) => {
-    btn.onclick = async () => {
-      try {
-        let createdReportId = '';
-        mutateRuntimeData((data) => {
-          const currentHome = getHomeById(data, homeId);
-          const currentPatient = getPatientById(currentHome, btn.dataset.patientId);
-          const rezept = getRezeptById(currentPatient, btn.dataset.rezeptId);
-          if (!currentPatient || !rezept) throw new Error('Rezept nicht gefunden');
-          const reports = ensureDoctorReportsState(rezept);
-          const now = new Date().toISOString();
-          createdReportId = `report_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-          reports.unshift({
-            reportId: createdReportId,
-            content: '',
-            therapieziele: [],
-            therapiezielFreitext: '',
-            compliance: '',
-            complianceFreitext: '',
-            verlauf: '',
-            verlaufFreitext: '',
-            therapieText: '',
-            bemerkungen: '',
-            createdAt: now,
-            updatedAt: now
-          });
-        });
-        await queuePersistRuntimeData();
-        showDoctorReportEditorView({
-          onLock,
-          homeId,
-          patientId: btn.dataset.patientId,
-          rezeptId: btn.dataset.rezeptId,
-          reportId: createdReportId,
-          searchText
-        });
-      } catch (err) {
-        console.error(err);
-        alert(err?.message || 'Arztbericht konnte nicht erstellt werden.');
-      }
-    };
-  });
-
-  document.querySelectorAll('.openDoctorReportBtn').forEach((btn) => {
-    btn.onclick = () => {
-      showDoctorReportEditorView({
-        onLock,
-        homeId,
-        patientId: btn.dataset.patientId,
-        rezeptId: btn.dataset.rezeptId,
-        reportId: btn.dataset.reportId,
-        searchText
-      });
-    };
-  });
-
   document.querySelectorAll('.savePatientDataBtn').forEach((btn) => {
     btn.onclick = async () => {
       const patientId = btn.dataset.patientId;
@@ -3446,6 +3542,116 @@ export function showHomeDetailView({ onLock, homeId, searchText = "" }) {
   });
 }
 
+// Übersicht aller Rezepte + Arztberichte eines Patienten (Neu anlegen und
+// bestehende öffnen). Direkt erreichbar über den "Arztbericht"-Button in
+// der Patientenliste (Dashboard -> Patienten) - ersetzt den bisherigen
+// Weg über Einrichtung -> Patient -> Arztbericht-Bereich -> Rezept
+// auswählen (Aufgabe 6: "Schnellerer Zugriff").
+export function showArztberichtView({ onLock, homeId, patientId, searchText = "" }) {
+  bindLockButton(onLock);
+  setCurrentView("arztbericht-uebersicht", { homeId, patientId, searchText });
+
+  const runtimeData = getRuntimeData();
+  const home = getHomeById(runtimeData, homeId);
+  const patient = getPatientById(home, patientId);
+
+  if (!home || !patient) {
+    showPatientenListeView({ onLock, searchText });
+    return;
+  }
+
+  const rezepte = sortRezepteForDisplay(patient.rezepte || []);
+  const patientName = formatPatientName(patient) || "Patient/in";
+
+  render(`
+    <div class="card">
+      <h2>Arztberichte</h2>
+      <p class="muted">Patient: ${escapeHtml(patientName)}</p>
+      <button id="backFromArztberichtBtn" class="secondary">Zurück zur Patientenliste</button>
+    </div>
+
+    <div class="card">
+      ${rezepte.length === 0 ? `<p class="muted">Keine Rezepte für Arztberichte vorhanden. Bitte zuerst ein Rezept anlegen.</p>` : `
+        <div class="list-stack">
+          ${rezepte.map((rezept, idx) => {
+            const reportCount = ensureDoctorReportsState(rezept).length;
+            const reports = [...ensureDoctorReportsState(rezept)].sort((a, b) => String(b?.createdAt || "").localeCompare(String(a?.createdAt || "")));
+            return `
+              <details class="accordion" style="margin-bottom:8px;" ${idx === 0 ? "open" : ""}>
+                <summary>
+                  <span>${escapeHtml(rezeptSummary(rezept))}</span>
+                  <span class="muted">${reportCount} Bericht(e)</span>
+                </summary>
+                <div class="accordion-body">
+                  <div class="compact-meta" style="margin-bottom:10px;">
+                    Arzt: ${escapeHtml(rezept.arzt || "—")}<br>
+                    Ausstellung: ${escapeHtml(rezept.ausstell || "—")}<br>
+                    Aktuelles Datum wird beim Anlegen automatisch gesetzt.
+                  </div>
+                  <div class="row" style="margin-bottom:10px;">
+                    <button class="createDoctorReportBtn" data-patient-id="${patient.patientId}" data-rezept-id="${rezept.rezeptId}">Neuen Arztbericht erstellen</button>
+                  </div>
+                  ${reports.length === 0 ? `<p class="muted">Noch keine Arztberichte gespeichert.</p>` : `
+                    <div class="list-stack">
+                      ${reports.map((report) => `
+                        <div class="compact-card" style="padding:14px;">
+                          <div class="row" style="justify-content:space-between; align-items:center; gap:10px; margin-bottom:8px;">
+                            <div>
+                              <div style="font-weight:700;">${escapeHtml(formatIsoDateShort(report.createdAt))}</div>
+                              <div class="compact-meta">Zuletzt geändert: ${escapeHtml(formatIsoDateShort(report.updatedAt || report.createdAt))}</div>
+                            </div>
+                            <button class="openDoctorReportBtn secondary" data-patient-id="${patient.patientId}" data-rezept-id="${rezept.rezeptId}" data-report-id="${report.reportId}">Öffnen</button>
+                          </div>
+                        </div>
+                      `).join("")}
+                    </div>
+                  `}
+                </div>
+              </details>
+            `;
+          }).join("")}
+        </div>
+      `}
+    </div>
+  `);
+
+  document.getElementById("backFromArztberichtBtn").onclick = () => {
+    showPatientenListeView({ onLock, searchText });
+  };
+
+  document.querySelectorAll(".createDoctorReportBtn").forEach((btn) => {
+    btn.onclick = async () => {
+      try {
+        const createdReportId = createDoctorReportForRezept(homeId, btn.dataset.patientId, btn.dataset.rezeptId);
+        await queuePersistRuntimeData();
+        showDoctorReportEditorView({
+          onLock,
+          homeId,
+          patientId: btn.dataset.patientId,
+          rezeptId: btn.dataset.rezeptId,
+          reportId: createdReportId,
+          searchText
+        });
+      } catch (err) {
+        console.error(err);
+        alert(err?.message || "Arztbericht konnte nicht erstellt werden.");
+      }
+    };
+  });
+
+  document.querySelectorAll(".openDoctorReportBtn").forEach((btn) => {
+    btn.onclick = () => {
+      showDoctorReportEditorView({
+        onLock,
+        homeId,
+        patientId: btn.dataset.patientId,
+        rezeptId: btn.dataset.rezeptId,
+        reportId: btn.dataset.reportId,
+        searchText
+      });
+    };
+  });
+}
 
 export function showDoctorReportEditorView({ onLock, homeId, patientId, rezeptId, reportId, searchText = "", successMsg = "" }) {
   bindLockButton(onLock);
@@ -3463,7 +3669,8 @@ export function showDoctorReportEditorView({ onLock, homeId, patientId, rezeptId
   }
 
   const patientName = formatPatientName(patient) || 'Patient/in';
-  const assessmentSummary = buildAssessmentSummaryLines(patient);
+  const introLine = buildDoctorReportIntroLine(patient);
+  const allAssessmentsHtml = buildAllAssessmentsReportHtml(patient);
 
   render(`
     <div class="card">
@@ -3481,12 +3688,14 @@ export function showDoctorReportEditorView({ onLock, homeId, patientId, rezeptId
         <div class="muted" style="text-align:right;">Arzt: ${escapeHtml(rezept.arzt || '—')}<br>Verordnung vom ${escapeHtml(rezept.ausstell || '—')}</div>
       </div>
 
-      <h3>Teil 1 – Assessment-Verlauf (automatisch)</h3>
+      <h3>Einleitung (automatisch)</h3>
       <div class="compact-card">
-        ${assessmentSummary ? `
-          <div class="compact-meta" style="margin-bottom:4px;">Stand: ${escapeHtml(formatDeDate(assessmentSummary.date))}</div>
-          ${assessmentSummary.lines.map((l) => `<div>${ampelBadgeHtml(l.ampel)} <strong>${escapeHtml(l.text)}</strong>${l.deltaText ? ` <span class="muted">(${escapeHtml(l.deltaText)})</span>` : ''}</div>`).join('')}
-        ` : `<p class="muted" style="margin:0;">Kein Assessment durchgeführt</p>`}
+        <p style="margin:0;">${escapeHtml(introLine)}</p>
+      </div>
+
+      <h3 style="margin-top:20px;">Teil 1 – Assessment-Verlauf (automatisch, alle bisherigen Assessments)</h3>
+      <div class="compact-card">
+        ${allAssessmentsHtml}
       </div>
 
       <h3 style="margin-top:20px;">Teil 2 – Geführte Eingabe</h3>
@@ -3504,6 +3713,12 @@ export function showDoctorReportEditorView({ onLock, homeId, patientId, rezeptId
       ${renderRadioGroup('verlauf', Assessment.VERLAUF_OPTIONEN, report.verlauf)}
       <label for="verlaufFreitext">Anmerkung zum Verlauf (optional)</label>
       <input id="verlaufFreitext" type="text" value="${escapeHtml(report.verlaufFreitext || '')}">
+
+      <label style="margin-top:14px;">Soll die Therapie weitergeführt werden?</label>
+      ${renderRadioGroup('therapieWeiterfuehren', Assessment.THERAPIE_WEITERFUEHREN_OPTIONEN, report.therapieWeiterfuehren)}
+
+      <label style="margin-top:14px;">Bringt die Therapie Nutzen?</label>
+      ${renderRadioGroup('therapieNutzen', Assessment.THERAPIE_NUTZEN_OPTIONEN, report.therapieNutzen)}
 
       <h3 style="margin-top:20px;">Teil 3 – Freitext</h3>
       <label for="therapieText">Therapie (Pflichtfeld) – was wurde in der Therapie gemacht</label>
@@ -3530,7 +3745,7 @@ export function showDoctorReportEditorView({ onLock, homeId, patientId, rezeptId
   bindCheckChipToggles(app);
 
   document.getElementById('backDoctorReportBtn').onclick = () => {
-    showHomeDetailView({ onLock, homeId, searchText });
+    showArztberichtView({ onLock, homeId, patientId, searchText });
   };
 
   function collectReportFormValues() {
@@ -3541,6 +3756,8 @@ export function showDoctorReportEditorView({ onLock, homeId, patientId, rezeptId
       complianceFreitext: document.getElementById('complianceFreitext').value.trim(),
       verlauf: getRadioValue('verlauf'),
       verlaufFreitext: document.getElementById('verlaufFreitext').value.trim(),
+      therapieWeiterfuehren: getRadioValue('therapieWeiterfuehren'),
+      therapieNutzen: getRadioValue('therapieNutzen'),
       therapieText: document.getElementById('therapieText').value.trim(),
       bemerkungen: document.getElementById('bemerkungen').value.trim()
     };
@@ -3609,7 +3826,7 @@ export function showDoctorReportEditorView({ onLock, homeId, patientId, rezeptId
         currentRezept.doctorReports = reports.filter((item) => item.reportId !== reportId);
       });
       await queuePersistRuntimeData();
-      showHomeDetailView({ onLock, homeId, searchText });
+      showArztberichtView({ onLock, homeId, patientId, searchText });
     } catch (err) {
       console.error(err);
       alert(err?.message || 'Arztbericht konnte nicht gelöscht werden.');
@@ -3617,31 +3834,10 @@ export function showDoctorReportEditorView({ onLock, homeId, patientId, rezeptId
   };
 }
 
-// Lädt die lokal vendorte Tesseract.js-API-Datei einmalig nach (nicht bei
-// jedem App-Start, nur wenn "Rezept abfotografieren" tatsächlich genutzt
-// wird). Worker-Skript und WASM-Core werden ebenfalls lokal vendort
-// (vendor/tesseract/) und erst beim tatsächlichen Erkennen nachgeladen;
-// nur die Sprachdaten (deu.traineddata) kommen weiterhin aus Tesseract.js'
-// eigenem Standard-CDN, da diese mehrere MB groß sind. Das Foto selbst
-// verlässt dabei nie das Gerät - nur die (nicht personenbezogene)
-// Erkennungssoftware wird ggf. nachgeladen.
-function loadTesseractScript() {
-  if (globalThis.Tesseract) return Promise.resolve();
-  if (loadTesseractScript._promise) return loadTesseractScript._promise;
-  loadTesseractScript._promise = new Promise((resolve, reject) => {
-    const script = document.createElement("script");
-    script.src = "./vendor/tesseract/tesseract.min.js";
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error("OCR-Engine konnte nicht geladen werden"));
-    document.head.appendChild(script);
-  });
-  return loadTesseractScript._promise;
-}
-
 // Kombinierter Flow: Patient anlegen und Rezept anlegen in einem Schritt
-// (statt wie bisher zwei getrennte Vorgänge). Wahlweise per manueller
-// Eingabe oder per Fotoerkennung (Tesseract.js OCR, läuft vollständig im
-// Browser, das Foto wird nach der Erkennung sofort verworfen).
+// (statt wie bisher zwei getrennte Vorgänge). Nur manuelle Eingabe (die
+// vormalige Fotoerkennung per Kamera/Tesseract.js OCR wurde auf
+// Nutzerwunsch komplett entfernt).
 export function showCreatePatientRezeptView({ onLock, homeId, searchText = "" }) {
   bindLockButton(onLock);
   setCurrentView("create-patient-rezept", { homeId, searchText });
@@ -3653,151 +3849,34 @@ export function showCreatePatientRezeptView({ onLock, homeId, searchText = "" })
     return;
   }
 
-  let cameraStream = null;
-  function stopCameraStream() {
-    if (cameraStream) {
-      cameraStream.getTracks().forEach((track) => track.stop());
-      cameraStream = null;
-    }
-  }
-
-  function renderModeSelection() {
-    stopCameraStream();
-    render(`
-      <div class="card">
-        <h2>Neuen Patienten + Rezept anlegen</h2>
-        <p class="muted">${escapeHtml(home.name || "Einrichtung")}</p>
-        <button id="backHomeDetailBtn" class="secondary">Zurück zum Heim</button>
-      </div>
-
-      <div class="card">
-        <h3>Eingabe</h3>
-        <button id="manualEntryBtn">Manuell eingeben</button>
-        <button id="photoEntryBtn" class="secondary">📷 Rezept abfotografieren</button>
-      </div>
-    `);
-
-    document.getElementById("backHomeDetailBtn").onclick = () => {
-      showHomeDetailView({ onLock, homeId, searchText });
-    };
-    document.getElementById("manualEntryBtn").onclick = () => renderCombinedForm(null);
-    document.getElementById("photoEntryBtn").onclick = () => renderCameraCapture();
-  }
-
-  function renderCameraCapture() {
-    render(`
-      <div class="card">
-        <h2>Rezept abfotografieren</h2>
-        <p class="muted">Das Foto wird nur im Browser verarbeitet und danach sofort verworfen. Es verlässt zu keinem Zeitpunkt das Gerät.</p>
-        <button id="backToModeBtn" class="secondary">Zurück</button>
-      </div>
-
-      <div class="card">
-        <video id="ocrVideo" autoplay playsinline muted style="width:100%; border-radius:12px; background:#000; display:block;"></video>
-        <canvas id="ocrCanvas" style="display:none;"></canvas>
-        <button id="ocrCaptureBtn" style="margin-top:12px;" disabled>Foto aufnehmen</button>
-        <div id="ocrMsg" class="muted" style="margin-top:10px;"></div>
-      </div>
-    `);
-
-    document.getElementById("backToModeBtn").onclick = () => renderModeSelection();
-
-    const video = document.getElementById("ocrVideo");
-    const captureBtn = document.getElementById("ocrCaptureBtn");
-    const msg = document.getElementById("ocrMsg");
-
-    if (!navigator.mediaDevices?.getUserMedia) {
-      msg.className = "error";
-      msg.textContent = "Kamera wird von diesem Browser nicht unterstützt. Bitte manuell eingeben.";
-      return;
-    }
-
-    navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
-      .then((stream) => {
-        cameraStream = stream;
-        video.srcObject = stream;
-        captureBtn.disabled = false;
-      })
-      .catch((err) => {
-        console.error(err);
-        msg.className = "error";
-        msg.textContent = "Kamera konnte nicht geöffnet werden (" + (err?.message || err) + "). Bitte manuell eingeben.";
-      });
-
-    captureBtn.onclick = async () => {
-      const canvas = document.getElementById("ocrCanvas");
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      canvas.getContext("2d").drawImage(video, 0, 0);
-      // Kamera sofort stoppen, sobald das Bild im Canvas liegt.
-      stopCameraStream();
-
-      captureBtn.disabled = true;
-      msg.className = "muted";
-      msg.textContent = "Text wird erkannt ...";
-
-      let worker = null;
-      // Eigener Timeout, unabhängig davon, ob Tesseract.js/der Worker im
-      // Fehlerfall (z.B. kein Netz für die Sprachdaten-CDN) sauber
-      // ablehnt oder hängen bleibt - die UI darf nie dauerhaft auf
-      // "Text wird erkannt ..." stehen bleiben.
-      const ocrTimeout = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error("Texterkennung hat zu lange gedauert (Zeitüberschreitung)")), 30000);
-      });
-
-      try {
-        await loadTesseractScript();
-        const data = await Promise.race([
-          (async () => {
-            worker = await globalThis.Tesseract.createWorker("deu", 1, {
-              corePath: "./vendor/tesseract/tesseract-core-simd-lstm.wasm.js",
-              workerPath: "./vendor/tesseract/worker.min.js"
-            });
-            const result = await worker.recognize(canvas);
-            return result.data;
-          })(),
-          ocrTimeout
-        ]);
-        const parsed = parseRezeptOcrText(data?.text || "");
-        renderCombinedForm(parsed);
-      } catch (err) {
-        console.error("OCR fehlgeschlagen:", err);
-        msg.className = "error";
-        msg.textContent = "Texterkennung fehlgeschlagen (evtl. keine Internetverbindung für die Spracherkennung). Bitte manuell eingeben.";
-        captureBtn.disabled = false;
-      } finally {
-        if (worker) worker.terminate().catch(() => {});
-        // Foto/Canvas-Daten sofort verwerfen, unabhängig vom Ergebnis.
-        const ctx = canvas.getContext("2d");
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        canvas.width = 0;
-        canvas.height = 0;
-      }
-    };
-  }
-
-  function renderCombinedForm(prefill) {
-    stopCameraStream();
+  function renderCombinedForm() {
     const arztRegistry = getArztRegistry(runtimeData);
 
     render(`
       <div class="card">
         <h2>Neuen Patienten + Rezept anlegen</h2>
         <p class="muted">${escapeHtml(home.name || "Einrichtung")}</p>
-        ${prefill ? `<p class="muted">Aus Foto erkannt – bitte prüfen und ggf. korrigieren.</p>` : ""}
-        <button id="backToModeBtn" class="secondary">Zurück</button>
+        <button id="backToModeBtn" class="secondary">Zurück zum Heim</button>
       </div>
 
       <div class="card">
         <h3>Patient</h3>
         <label for="lastName">Nachname</label>
-        <input id="lastName" type="text" value="${escapeHtml(prefill?.lastName || "")}">
+        <input id="lastName" type="text" value="">
 
         <label for="firstName">Vorname</label>
-        <input id="firstName" type="text" value="${escapeHtml(prefill?.firstName || "")}">
+        <input id="firstName" type="text" value="">
+
+        <label for="anrede">Anrede</label>
+        <select id="anrede">
+          <option value="">Keine Angabe</option>
+          <option value="frau">Frau</option>
+          <option value="herr">Herr</option>
+        </select>
+        <p class="muted">Wird für die automatische Anrede im Arztbericht genutzt.</p>
 
         <label for="birthDate">Geburtsdatum</label>
-        <input id="birthDate" type="text" placeholder="TT.MM.JJJJ" inputmode="numeric" value="${escapeHtml(prefill?.birthDate || "")}">
+        <input id="birthDate" type="text" placeholder="TT.MM.JJJJ" inputmode="numeric" value="">
 
         <div class="checkbox-row">
           <label class="check-chip"><input id="hb" type="checkbox"> <span>Hausbesuch</span></label>
@@ -3807,7 +3886,7 @@ export function showCreatePatientRezeptView({ onLock, homeId, searchText = "" })
       <div class="card">
         <h3>Rezept</h3>
         <label for="arzt">Arzt</label>
-        <input id="arzt" type="text" list="doctorSuggestions" autocomplete="off" value="${escapeHtml(prefill?.arzt || "")}">
+        <input id="arzt" type="text" list="doctorSuggestions" autocomplete="off" value="">
         <datalist id="doctorSuggestions">
           ${getKnownDoctorNames(runtimeData).map((name) => `<option value="${escapeHtml(name)}"></option>`).join("")}
         </datalist>
@@ -3815,18 +3894,18 @@ export function showCreatePatientRezeptView({ onLock, homeId, searchText = "" })
         ${renderArztAdresseFields("")}
 
         <label for="ausstell">Ausstellungsdatum</label>
-        <input id="ausstell" type="text" placeholder="TT.MM.JJJJ" inputmode="numeric" value="${escapeHtml(prefill?.ausstell || "")}">
+        <input id="ausstell" type="text" placeholder="TT.MM.JJJJ" inputmode="numeric" value="">
 
         <label for="icd10">ICD-10 Code</label>
-        <input id="icd10" type="text" placeholder="z.B. M54.5" value="${escapeHtml(prefill?.icd10 || "")}">
+        <input id="icd10" type="text" placeholder="z.B. M54.5" value="">
 
         <label for="icd10b">2. ICD-10 Code (optional)</label>
-        <input id="icd10b" type="text" placeholder="z.B. M54.5" value="${escapeHtml(prefill?.icd10b || "")}">
+        <input id="icd10b" type="text" placeholder="z.B. M54.5" value="">
 
-        ${renderLeitsymptomatikField(prefill?.leitsymptomatik || "")}
+        ${renderLeitsymptomatikField("")}
 
         <h3 style="margin-top:20px;">Leistungen</h3>
-        ${renderRezeptItemsEditor(prefill?.heilmittel ? [{ type: prefill.heilmittel, count: prefill.anzahl || "" }] : [])}
+        ${renderRezeptItemsEditor([])}
 
         <h3 style="margin-top:20px;">Rezeptprüfung</h3>
         <div class="checkbox-row">
@@ -3851,12 +3930,15 @@ export function showCreatePatientRezeptView({ onLock, homeId, searchText = "" })
       </div>
     `);
 
-    document.getElementById("backToModeBtn").onclick = () => renderModeSelection();
+    document.getElementById("backToModeBtn").onclick = () => {
+      showHomeDetailView({ onLock, homeId, searchText });
+    };
 
     bindDateAutoFormat(document.getElementById("birthDate"));
     bindDateAutoFormat(document.getElementById("ausstell"));
     bindIcdAutoFormat(document.getElementById("icd10"));
-    bindRezeptItemsEditor(prefill?.heilmittel ? [{ type: prefill.heilmittel, count: prefill.anzahl || "" }] : []);
+    bindIcdAutoFormat(document.getElementById("icd10b"));
+    bindRezeptItemsEditor([]);
     bindCheckChipToggles(app);
     bindQuickDocSelectionStyles(app);
     bindSelectableCardChecks(app);
@@ -3873,6 +3955,7 @@ export function showCreatePatientRezeptView({ onLock, homeId, searchText = "" })
 
       const firstName = document.getElementById("firstName").value.trim();
       const lastName = document.getElementById("lastName").value.trim();
+      const anrede = document.getElementById("anrede").value;
       const birthDate = document.getElementById("birthDate").value.trim();
       const hb = document.getElementById("hb").checked;
 
@@ -3891,6 +3974,7 @@ export function showCreatePatientRezeptView({ onLock, homeId, searchText = "" })
         const newPatientId = createPatient(homeId, {
           firstName,
           lastName,
+          anrede,
           birthDate,
           befreit: false,
           hb
@@ -3916,7 +4000,7 @@ export function showCreatePatientRezeptView({ onLock, homeId, searchText = "" })
     };
   }
 
-  renderModeSelection();
+  renderCombinedForm();
 }
 
 // Wird direkt nach dem Anlegen eines neuen Patienten aufgerufen (Funktion 3).
@@ -4088,6 +4172,10 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
   const weiter = onDone || (() => showPatientDetailView({ onLock, homeId, patientId }));
 
   function renderFrage() {
+    const existingAssessments = [...(patient.assessments || [])]
+      .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+    const hasExisting = existingAssessments.length > 0;
+
     render(`
       <div class="card">
         <h2>Assessment</h2>
@@ -4100,6 +4188,11 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
           <button id="assessmentJetztBtn">Jetzt durchführen</button>
           <button id="assessmentSpaeterBtn" class="secondary">Später</button>
         </div>
+        ${hasExisting ? `
+        <div class="row" style="margin-top:12px;">
+          <button id="assessmentZusammenfassungBtn" class="secondary">Letztes Assessment ansehen (${escapeHtml(formatDeDate(existingAssessments[0].date) || "—")})</button>
+        </div>
+        ` : ""}
         <div class="row" style="margin-top:12px;">
           <button id="assessmentAbbrechenBtn" class="secondary">Abbrechen</button>
         </div>
@@ -4109,6 +4202,38 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
     document.getElementById("assessmentJetztBtn").onclick = () => stepEbene0();
     document.getElementById("assessmentSpaeterBtn").onclick = () => renderSpaeter();
     document.getElementById("assessmentAbbrechenBtn").onclick = () => weiter();
+    if (hasExisting) {
+      document.getElementById("assessmentZusammenfassungBtn").onclick = () => renderZusammenfassung(existingAssessments[0]);
+    }
+  }
+
+  // Zusammenfassung des zuletzt durchgeführten Assessments - bislang war
+  // von hier aus nur ein komplett neues Assessment möglich, ein bereits
+  // vorhandenes ließ sich nur über den Umweg der Patientendetailseite
+  // einsehen.
+  function renderZusammenfassung(latest) {
+    const summary = buildAssessmentSummaryLines(patient);
+    const weicheLabel = Assessment.WEICHEN_OPTIONEN.find((w) => w.val === latest.weiche)?.label || "Basis";
+
+    render(`
+      <div class="card">
+        <h2>Letztes Assessment</h2>
+        <p class="muted">Patient: ${escapeHtml(formatPatientName(patient) || "—")} · ${escapeHtml(formatDeDate(latest.date) || "—")} · ${escapeHtml(weicheLabel)}</p>
+        <button id="backToAssessmentFrageBtn" class="secondary">Zurück</button>
+      </div>
+
+      <div class="card">
+        ${summary && summary.lines.length ? `
+          <div class="list-stack">
+            ${summary.lines.map((l) => `
+              <div>${ampelBadgeHtml(l.ampel)} <strong>${escapeHtml(l.text)}</strong>${l.deltaText ? ` <span class="muted">(${escapeHtml(l.deltaText)})</span>` : ""}</div>
+            `).join("")}
+          </div>
+        ` : `<p class="muted">Keine auswertbaren Ergebnisse für dieses Assessment.</p>`}
+      </div>
+    `);
+
+    document.getElementById("backToAssessmentFrageBtn").onclick = () => renderFrage();
   }
 
   // ---------- Geführter Assessment-Wizard ----------
@@ -5403,6 +5528,7 @@ export function showCreateRezeptView({ onLock, homeId, patientId, prefill = null
 
   bindDateAutoFormat(document.getElementById("ausstell"));
   bindIcdAutoFormat(document.getElementById("icd10"));
+  bindIcdAutoFormat(document.getElementById("icd10b"));
   bindRezeptItemsEditor(prefillItems);
   bindCheckChipToggles(app);
   bindQuickDocSelectionStyles(app);
@@ -5519,6 +5645,7 @@ export function showEditRezeptView({ onLock, homeId, patientId, rezeptId }) {
 
   bindDateAutoFormat(document.getElementById("ausstell"));
   bindIcdAutoFormat(document.getElementById("icd10"));
+  bindIcdAutoFormat(document.getElementById("icd10b"));
   bindRezeptItemsEditor(items);
   bindCheckChipToggles(app);
   bindQuickDocSelectionStyles(app);

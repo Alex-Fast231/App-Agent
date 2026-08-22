@@ -46,7 +46,7 @@
 <body>
 <header>
   <h1>FaSt-Doku Viewer</h1>
-  <p>Läuft lokal, ohne Internetverbindung. Lädt die täglichen, PIN-geschützten Backup-ZIPs aus der FaSt-Doku App ein.</p>
+  <p>Läuft lokal, ohne Internetverbindung. Lädt die täglichen, PIN-geschützten Backup-ZIPs aus der FaSt-Doku App ein. Gespeicherte Daten sind bei jedem Öffnen zusätzlich mit einer PIN gesperrt.</p>
 </header>
 <main id="app"></main>
 
@@ -200,6 +200,59 @@ function mergeAppDataIntoStore(store, appData) {
   };
 
   return store;
+}
+
+// ============================================================
+// PIN-Sperre beim Öffnen: die im Browser gespeicherten Therapeuten-
+// Daten (localStorage, aus zuvor eingespielten Backup-ZIPs) sind ohne
+// diese Sperre für jeden lesbar, der das Gerät/den Browser öffnet -
+// unabhängig von der ZIP-eigenen PIN-Abfrage beim Einspielen einer
+// neuen Datei. Der Unlock-Status wird bewusst NICHT gespeichert
+// (nur im Arbeitsspeicher), damit bei jedem erneuten Öffnen der Seite
+// wieder die PIN verlangt wird.
+// ============================================================
+const APP_UNLOCK_PIN = "1550";
+let isUnlocked = false;
+
+function hasAnyStoredData() {
+  return Object.keys(store.therapists || {}).length > 0;
+}
+
+function renderLockScreen() {
+  app.innerHTML = `
+    <div class="card">
+      <h2>Gesperrt</h2>
+      <p class="muted">Zum Schutz der gespeicherten Patientendaten bitte die PIN eingeben.</p>
+      <label for="unlockPinInput">PIN</label>
+      <input id="unlockPinInput" type="password" inputmode="numeric" autocomplete="off">
+      <div class="row"><button id="unlockBtn">Entsperren</button></div>
+      <div id="unlockMsg" class="error"></div>
+    </div>
+  `;
+
+  const tryUnlock = () => {
+    const pin = document.getElementById("unlockPinInput").value;
+    if (pin === APP_UNLOCK_PIN) {
+      isUnlocked = true;
+      renderGate();
+    } else {
+      document.getElementById("unlockMsg").textContent = "Falsche PIN.";
+    }
+  };
+
+  document.getElementById("unlockBtn").onclick = tryUnlock;
+  document.getElementById("unlockPinInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") tryUnlock();
+  });
+  document.getElementById("unlockPinInput").focus();
+}
+
+function renderGate() {
+  if (hasAnyStoredData() && !isUnlocked) {
+    renderLockScreen();
+  } else {
+    render();
+  }
 }
 
 // ============================================================
@@ -392,9 +445,80 @@ function renderDoctorDetail(therapist, doctorName) {
   `;
 }
 
+function renderKilometerRows(rows) {
+  if (!rows || rows.length === 0) return '<p class="muted">Keine Einträge.</p>';
+  return `
+    <table>
+      <tr><th>Datum</th><th>Von</th><th>Nach</th><th>Km</th></tr>
+      ${rows.map((k) => `<tr><td>${esc(k.date || "—")}</td><td>${esc(k.fromLabel || "—")}</td><td>${esc(k.toLabel || "—")}</td><td>${esc(k.km ?? "—")}</td></tr>`).join("")}
+    </table>
+  `;
+}
+
+// Tab "Kilometer": alle Fahrten des Therapeuten über alle Patienten
+// hinweg, getrennt nach abgerechnet ("abgegeben") und noch offen -
+// anders als der bisherige Kilometer-Abschnitt in der Patientendetail-
+// ansicht (der nur die Fahrten EINES Patienten zeigt).
+function renderKilometerTab(therapist) {
+  const travelLog = [...(therapist.kilometer?.travelLog || [])]
+    .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+  const offen = travelLog.filter((k) => !k.abgerechnet);
+  const abgegeben = travelLog.filter((k) => k.abgerechnet);
+  const sumKm = (rows) => rows.reduce((sum, k) => sum + (Number(k.km) || 0), 0);
+
+  return `
+    <div class="card">
+      <h3>Noch nicht abgegeben</h3>
+      <p class="muted">${offen.length} Fahrt(en) · ${sumKm(offen).toFixed(1)} km gesamt</p>
+      ${renderKilometerRows(offen)}
+    </div>
+    <div class="card">
+      <h3>Bereits abgegeben</h3>
+      <p class="muted">${abgegeben.length} Fahrt(en) · ${sumKm(abgegeben).toFixed(1)} km gesamt</p>
+      ${renderKilometerRows(abgegeben)}
+    </div>
+  `;
+}
+
+// Tab "Abgabelisten": alle gespeicherten Abgabelisten des Therapeuten
+// (bisher nur indirekt über einen Patientenfilter im Patientendetail
+// sichtbar, siehe renderPatientDetail) - hier als eigene, durchsuchbare
+// Übersicht mit allen Positionen je Liste.
+function renderAbgabelistenTab(therapist) {
+  const list = [...(therapist.abgabeHistory || [])]
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+
+  if (list.length === 0) return '<div class="card"><p class="muted">Keine gespeicherten Abgabelisten.</p></div>';
+
+  return list.map((entry) => `
+    <details class="accordion" style="margin-bottom:10px;">
+      <summary>
+        <span>${esc(entry.title || "Abgabeliste")}</span>
+        <span class="muted">${esc(formatDeDate((entry.createdAt || "").slice(0, 10)) || "—")} · ${(entry.rows || []).length} Position(en)</span>
+      </summary>
+      <div class="accordion-body">
+        ${(entry.rows || []).length === 0 ? '<p class="muted">Keine Positionen.</p>' : `
+          <table>
+            <tr><th>Patient</th><th>Heim</th><th>Leistung</th><th>Ausstellung</th></tr>
+            ${entry.rows.map((row) => `
+              <tr>
+                <td>${esc(`${row.patientLastName || ""}${row.patientFirstName ? ", " + row.patientFirstName : ""}`.trim() || row.patient || "—")}</td>
+                <td>${esc(row.heim || "—")}</td>
+                <td>${esc(row.leistung || "—")}</td>
+                <td>${esc(row.ausstell || "—")}</td>
+              </tr>
+            `).join("")}
+          </table>
+        `}
+      </div>
+    </details>
+  `).join("");
+}
+
 function renderTherapistBody(therapist) {
   const tab = uiState.activeTab[therapist.therapistId] || "patienten";
   const search = (uiState.searchText[therapist.therapistId] || "").trim().toLowerCase();
+  const hasSearch = tab === "patienten" || tab === "aerzte";
 
   let listHtml = "";
   let detailHtml = "";
@@ -419,7 +543,7 @@ function renderTherapistBody(therapist) {
       const found = rows.find((r) => r.patient.patientId === selectedPatientId) || getAllPatientsForTherapist(therapist).find((r) => r.patient.patientId === selectedPatientId);
       if (found) detailHtml = renderPatientDetail(therapist, found.home, found.patient);
     }
-  } else {
+  } else if (tab === "aerzte") {
     let doctors = getAllDoctorsForTherapist(therapist);
     if (search) doctors = doctors.filter((d) => d.name.toLowerCase().includes(search));
 
@@ -431,16 +555,24 @@ function renderTherapistBody(therapist) {
 
     const selectedArzt = uiState.selectedArzt[therapist.therapistId];
     if (selectedArzt) detailHtml = renderDoctorDetail(therapist, selectedArzt);
+  } else if (tab === "kilometer") {
+    detailHtml = renderKilometerTab(therapist);
+  } else if (tab === "abgabelisten") {
+    detailHtml = renderAbgabelistenTab(therapist);
   }
 
   return `
     <div class="tab-row">
-      <button class="tabBtn ${tab === "patienten" ? "active" : ""}" data-tab="patienten" data-therapist-id="${esc(therapist.therapistId)}">Patienten</button>
+      <button class="tabBtn ${tab === "patienten" ? "active" : ""}" data-tab="patienten" data-therapist-id="${esc(therapist.therapistId)}">Einrichtung / Patient</button>
       <button class="tabBtn ${tab === "aerzte" ? "active" : ""}" data-tab="aerzte" data-therapist-id="${esc(therapist.therapistId)}">Ärzte</button>
     </div>
-    <input type="text" class="searchInput" data-therapist-id="${esc(therapist.therapistId)}" placeholder="Suche..." value="${esc(uiState.searchText[therapist.therapistId] || "")}">
-    <div style="margin-top:12px;">${listHtml}</div>
-    ${detailHtml}
+    <div class="tab-row">
+      <button class="tabBtn ${tab === "kilometer" ? "active" : ""}" data-tab="kilometer" data-therapist-id="${esc(therapist.therapistId)}">Kilometer</button>
+      <button class="tabBtn ${tab === "abgabelisten" ? "active" : ""}" data-tab="abgabelisten" data-therapist-id="${esc(therapist.therapistId)}">Abgabelisten</button>
+    </div>
+    ${hasSearch ? `<input type="text" class="searchInput" data-therapist-id="${esc(therapist.therapistId)}" placeholder="Suche..." value="${esc(uiState.searchText[therapist.therapistId] || "")}">` : ""}
+    ${listHtml ? `<div style="margin-top:12px;">${listHtml}</div>` : ""}
+    <div style="margin-top:12px;">${detailHtml}</div>
   `;
 }
 
@@ -578,7 +710,7 @@ function bindBodyEvents(therapist) {
   });
 }
 
-render();
+renderGate();
 </script>
 </body>
 </html>

@@ -1,12 +1,38 @@
 # FaSt App – Handoff Summary
-**Stand:** 2026-08-20 (Session-Ende, fünfte Session, inkl. zweier Nutzer-Feedback-Runden: Fax/PDF-Upload entfernt, tägliches Viewer-Backup, OCR-ROI-Rückbau)
-**Branch:** `claude/fast-app-8-features-xep6yr` (in `/workspace/app-test`, lokal, **43 Commits, weiterhin nicht auf GitHub gepusht**)
+**Stand:** 2026-08-22 (Session-Ende, sechste Session: 8 vorgegebene Aufgaben komplett umgesetzt)
+**Branch:** `claude/fast-app-8-features-xep6yr` (in `/workspace/app-test`, lokal, **54 Commits, weiterhin nicht auf GitHub gepusht**)
 
-Diese Datei ersetzt die vorherige Version vom 2026-08-17 (vierte Session) vollständig.
+Diese Datei ersetzt die vorherige Version vom 2026-08-20 (fünfte Session) vollständig. Die fünfte Session (Fax/PDF-Upload, tägliches Viewer-Backup, OCR-ROI-Rückbau) bleibt unten in Abschnitt 0b/0/-1 als historische Dokumentation stehen.
 
 ---
 
-## 0b. Zweites Nutzer-Feedback: OCR Region-of-Interest zurückgebaut, wieder Gesamtbild-Scan (Commit `b76e73f`)
+## 6. Sechste Session: 8 vorgegebene Aufgaben (Aufgabendokument "FaSt App – Aufgaben nächste Session")
+
+Der Nutzer gab acht konkrete Aufgaben vor. Alle acht wurden umgesetzt, getestet und committet (Commits `64f1a7e` bis `1a97ddd`).
+
+**Aufgabe 1 – OCR/Kamera komplett entfernt.** Die komplette Fotoerkennung (Kamera-Aufnahme + Tesseract.js) wurde entfernt, nachdem sie in Session 5 bereits zurückgebaut, aber nicht ganz gestrichen worden war. `modules/ocr.js` und `vendor/tesseract/` gelöscht, `showCreatePatientRezeptView` zeigt jetzt direkt das Eingabeformular ohne Zwischenschritt "Manuell/Foto".
+
+**Aufgabe 2 – Arzt-Autocomplete.** `bindArztAdresseAutofill` zeigt jetzt zusätzlich zur bereits vorhandenen Exakt-Treffer-Adressbefüllung ein eigenes Dropdown mit passenden Ärzten beim Tippen (nicht auf die unzuverlässige native `<datalist>` verlassen, v.a. auf mobilen Browsern). Klick auf einen Vorschlag füllt Name + Adresse/PLZ/Ort. Ein danach gefundener Bug (Dropdown konnte bei einem weit unten stehenden Feld außerhalb des sichtbaren Bereichs landen) wurde behoben: klappt jetzt automatisch nach oben auf, wenn unten kein Platz ist, plus Scroll-Repositionierung.
+
+**Aufgabe 3 – ICD-10 Feld 2.** `bindIcdAutoFormat` (automatische Punktsetzung) wird jetzt an allen drei Stellen im Formular auch auf das zweite ICD-10-Feld (`icd10b`) angewendet.
+
+**Aufgabe 4 – Automatischer Export nach Kalendertag.** `isAutoExportDue()` vergleicht jetzt lokale Kalendertage statt verstrichener 24 Stunden - "Zählung nach Mitternacht" wie vorgegeben (ein Export um 23:50 Uhr macht den nächsten schon um 00:10 Uhr desselben Tages fällig). Toast-Text von "Export gesendet" auf "Daten abgeschickt" geändert (bewusst nur für den aktuellen Testbetrieb).
+
+**Aufgabe 5 – Assessment-Zusammenfassung ansehbar.** `showAssessmentAbfrageView` zeigt jetzt einen Button "Letztes Assessment ansehen (Datum)", sobald für den Patienten bereits ein Assessment existiert - vorher war von dort aus nur ein komplett neues Assessment möglich.
+
+**Aufgabe 6 – Therapiebericht überarbeitet.** Feste Einleitung mit automatisch befüllten Platzhaltern (`#Anrede-Arzt#`, `#Anrede#`, `#Patientenname#`, `#Geburtsdatum#`) - dafür neues Patientenfeld "Anrede" (Frau/Herr/keine Angabe) ergänzt, da die App bisher kein Geschlecht erfasste. Bericht zeigt jetzt ALLE bisherigen Assessments (nicht nur das letzte). Zwei neue Fragen ("Therapie weiterführen?" Ja/Nein, "Bringt Nutzen?" Ja/Nein/Teilweise). Schnellerer Zugriff: neuer Button "Arztbericht" in der Patientenliste (Dashboard → Patienten) direkt unter "Rezeptoptimierer", der bisherige Weg über die Einrichtung wurde entfernt. **Dabei zwei echte Bugs gefunden und behoben:** Der Arztbericht-Normalizer in `data/normalization.js` hatte eine Feld-Whitelist ohne `"status_quo"` (Verlauf) und `"keine_angabe"` (Compliance) - beide gültigen, in der UI wählbaren Werte wurden beim Speichern automatisch wieder gelöscht.
+
+**Aufgabe 7 – Viewer überarbeitet.** PIN-Sperre beim Öffnen (nicht nur beim Einspielen einer neuen ZIP): sobald bereits Daten im localStorage liegen, wird beim Laden der Seite erst ein PIN-Sperrbildschirm gezeigt. Zwei neue Tabs: "Kilometer" (alle Fahrten des Therapeuten, getrennt nach abgegeben/nicht abgegeben) und "Abgabelisten" (alle gespeicherten Abgabelisten mit Positionen). Der "Patienten"-Tab wurde in "Einrichtung / Patient" umbenannt (Funktion unverändert). Die additive Mehrfach-ZIP-Zusammenführung (Therapeuten werden addiert, nicht ersetzt) war bereits aus einer früheren Session korrekt implementiert.
+
+**Aufgabe 8 – App-Name "FaSt App".** "FaSt-Doku" im obersten Header, Browser-Tab-Titel, PWA-Manifest und den zwei angrenzenden Login/Setup-Texten geändert.
+
+**Getestet:** Fünf neue Playwright-Tests (`smoketest_arzt_autocomplete.mjs` 5/5, `smoketest_assessment_zusammenfassung.mjs` 7/7, `smoketest_therapiebericht_aufgabe6.mjs` 12/12, `smoketest_viewer_aufgabe7.mjs` 9/9) plus alle sechs bestehenden Regressions-Suiten weiterhin grün - insgesamt 84/84 Einzelschritte über 11 Testdateien am Ende der Session. `node --check` erfolgreich für alle Nicht-Vendor-`.js`-Dateien.
+
+**Nicht in dieser Session verändert/getestet:** Die tatsächliche Zustellung der täglichen Viewer-Backup-E-Mail bei physio_fast@gmx.de (aus Session 5, weiterhin ausstehend), sowie ein echter Testlauf der (jetzt entfernten) Kamera-OCR erübrigt sich durch Aufgabe 1.
+
+---
+
+## 0b. Zweites Nutzer-Feedback (fünfte Session): OCR Region-of-Interest zurückgebaut, wieder Gesamtbild-Scan (Commit `b76e73f`)
 
 Rückmeldung: "seit du bei der Bilderkennung die 8 Felder eingeführt hast und das Format in der Kamera ist die OCR viel schlechter. Mach es wieder auf den ursprünglichen Zustand." Die in Abschnitt 1 (unten) beschriebene Region-of-Interest-Umstellung (Kamera-Ausrichtungsrahmen + 8 einzeln zugeschnittene Formularfelder statt einem Gesamtbild-Scan) hat sich in der Praxis also verschlechternd auf die Erkennungsqualität ausgewirkt, vermutlich weil ein leicht schief/nicht exakt im Rahmen liegendes Foto bei der ROI-Methode dazu führt, dass einzelne Feld-Crops den Text abschneiden oder verfehlen - während der alte Gesamtbild-Scan mit Freitext-Suche über das ganze erkannte Bild toleranter gegenüber Ausrichtungsungenauigkeiten war.
 
@@ -126,18 +152,21 @@ Alle Testskripte liegen unter `/tmp/claude-0/-home-user/a9e9d6a0-2415-56f0-be21-
 
 ## 3. Was noch aussteht
 
-1. **GitHub-Push weiterhin blockiert (403).** Unverändert. Alle 43 Commits liegen lokal bereit. Diese Session wieder die **komplette App** als ZIP bereitgestellt (nicht nur Änderungen), wie vom Nutzer als Standardvorgehen verlangt.
+1. **GitHub-Push weiterhin blockiert (403).** Unverändert. Alle 54 Commits liegen lokal bereit. Diese Session wieder die **komplette App** (und separat den Viewer) als ZIP bereitgestellt, wie vom Nutzer als Standardvorgehen verlangt.
 
-2. **Echter Testlauf mit fotografiertem Muster-13-Formular fehlt weiterhin, jetzt mit dem zurückgebauten Gesamtbild-Scan (siehe Abschnitt 0b).** Die OCR-Sprachdaten-CDN ist in dieser Sandbox-Umgebung blockiert (`net::ERR_TUNNEL_CONNECTION_FAILED`/`Failed to fetch`), daher konnte die Erkennung per Kamera nur bis zur erwarteten Fehlermeldung getestet werden, nicht mit echtem, erkanntem Text. **Wichtigster nächster Schritt für den Nutzer:** ein echtes Muster-13-Rezept fotografieren und prüfen, ob die Erkennungsqualität mit dem Gesamtbild-Scan tatsächlich besser ist als mit der zuvor genutzten Feld-für-Feld-Erkennung (das war der Auslöser für den Rückbau in Abschnitt 0b).
+2. **Tägliches Viewer-Backup: erste echte Zustellung noch nicht vom Nutzer bestätigt.** Unverändert aus Session 5 - der EmailJS-Versand konnte in dieser Sandbox nur durch Abfangen des Requests verifiziert werden, nicht durch eine tatsächlich zugestellte E-Mail. **Nächster Schritt für den Nutzer:** prüfen, ob eine E-Mail mit ZIP-Anhang bei physio_fast@gmx.de ankommt, und ob sich die ZIP mit der PIN 1550 im Viewer öffnen lässt (jetzt zusätzlich hinter der neuen PIN-Sperre beim Öffnen des Viewers, siehe Abschnitt 6, Aufgabe 7).
 
-3. **Tägliches Viewer-Backup: erste echte Zustellung noch nicht vom Nutzer bestätigt.** Der EmailJS-Versand konnte in dieser Sandbox nur durch Abfangen des Requests verifiziert werden (siehe Abschnitt 0), nicht durch eine tatsächlich zugestellte E-Mail. **Nächster Schritt für den Nutzer:** nach dem nächsten Entsperren der App (oder nach Ablauf eines Tages seit dem letzten Export) prüfen, ob eine E-Mail mit ZIP-Anhang bei physio_fast@gmx.de ankommt, und ob sich die ZIP mit der PIN 1550 im Viewer öffnen lässt.
+3. **Vom Nutzer zu testen (aus den 8 Aufgaben dieser Session):**
+   - Arzt-Autocomplete-Dropdown in der Praxis ausprobieren (Aufgabe 2).
+   - Das neue Patientenfeld "Anrede" nutzen, damit die automatische Einleitung im Therapiebericht korrekt personalisiert ("Frau"/"Herrn") statt neutral erscheint (Aufgabe 6) - bei allen VOR dieser Session angelegten Patienten ist das Feld leer und muss ggf. nachträglich ergänzt werden (dafür aktuell keine Bearbeitungsmöglichkeit im Formular vorhanden, siehe Punkt 5 unten).
+   - Die neuen Kilometer-/Abgabelisten-Tabs im Viewer nach dem nächsten echten ZIP-Import prüfen (Aufgabe 7).
 
 4. **Offene Punkte aus früheren Sessions** (unverändert, siehe deren Handoff-Versionen im Git-Verlauf):
    - 3 offene Code-Lücken (`updateHomeAddress`, `deleteDiagnoseZuordnung`, `createRezeptTimeEntry` – Funktionen ohne UI-Anbindung).
-   - DSGVO-Löschkonzept/Aufbewahrungsfristen und AVV-Prüfung mit EmailJS weiterhin organisatorisch/rechtlich zu klären. Zusätzlich neu zu beachten: das tägliche Viewer-Backup verschickt jetzt unverschlüsselte Gesundheitsdaten (nur per 4-stelliger ZIP-PIN geschützt) per E-Mail – eine bewusste Nutzerentscheidung (siehe Abschnitt 0), aber ggf. bei der DSGVO-Prüfung zu berücksichtigen.
+   - DSGVO-Löschkonzept/Aufbewahrungsfristen und AVV-Prüfung mit EmailJS weiterhin organisatorisch/rechtlich zu klären. Das tägliche Viewer-Backup verschickt weiterhin unverschlüsselte Gesundheitsdaten (nur per 4-stelliger ZIP-PIN geschützt) per E-Mail – eine bewusste Nutzerentscheidung, aber ggf. bei der DSGVO-Prüfung zu berücksichtigen.
    - "FaSt-Button"-Thema aus einer früheren Aufgabe wurde auf Nutzerwunsch übersprungen.
 
-5. **Viewer-Session (separates Projekt).** Laut Nutzer folgt nach erfolgreichem Test des täglichen Exports eine separate Session für den lokalen PC-Viewer. Der Viewer (`viewer/index.html`) liest das neue PIN-Format bereits, eine weitergehende Überarbeitung der Viewer-Oberfläche selbst steht laut Nutzer noch aus.
+5. **Neu diese Session: Kein Bearbeiten-Weg für das Anrede-Feld bei bereits bestehenden Patienten.** Das Feld wird nur beim Neuanlegen abgefragt (`showCreatePatientRezeptView`). Falls der Nutzer die Anrede nachträglich für Bestandspatienten setzen möchte, fehlt dafür aktuell eine UI - ggf. in einer Folge-Session ergänzen (z.B. im ohnehin vorhandenen "Stammdaten"-Bearbeitungsbereich der Home-Detail-Ansicht).
 
 ---
 
@@ -147,14 +176,16 @@ Repo: `/workspace/app-test` (GitHub: `alex-fast231/app-test`, Branch `claude/fas
 
 | Datei | Zweck |
 |---|---|
-| `data/schema.js` | `APP_VERSION` (aktuell 3.9.21, automatischer Bump bei jedem Commit) |
-| `modules/ocr.js` | **Zurückgebaut (Abschnitt 0b)** – wieder Freitext-Parsing (`parseRezeptOcrText`) über den gesamten erkannten Text statt Feld-für-Feld-Crops; Lymphdrainage-Dauer-Erkennung (MLD30/45/60) weiterhin korrekt |
-| `modules/ocrRegions.js`, `modules/ocrMarkDetection.js` | **Entfernt (Abschnitt 0b)** – nur für die inzwischen zurückgebaute ROI-Erkennung gebraucht |
-| `modules/autoExport.js` | **Umgebaut (Abschnitt 0)** – tägliches PIN-geschütztes (`1550`) Viewer-Backup (`appData.json` in ZIP) an feste Adresse `physio_fast@gmx.de`, statt des früheren doppelt-verschlüsselten Formats |
+| `data/schema.js` | `APP_VERSION` (aktuell 3.9.26, automatischer Bump bei jedem Commit) |
+| `modules/ocr.js`, `vendor/tesseract/` | **Entfernt (Abschnitt 6, Aufgabe 1)** – komplette Fotoerkennung gestrichen, nur noch manuelle Eingabe |
+| `modules/autoExport.js` | Tägliches PIN-geschütztes (`1550`) Viewer-Backup an `physio_fast@gmx.de`; Fälligkeit jetzt kalendertag-basiert statt 24h-Timer (Abschnitt 6, Aufgabe 4) |
 | `modules/backup.js` | Unverändert – manuelles "Backup exportieren/importieren" in den Einstellungen, weiterhin mit dem echten Praxispasswort |
-| `ui/views.js` | `showCreatePatientRezeptView`/`renderCameraCapture` **zurückgebaut (Abschnitt 0b)** auf einen einzelnen Tesseract-Durchlauf über das ganze Foto, ohne Ausrichtungsrahmen. Der Fax/PDF-Upload aus Abschnitt -1 wurde bereits in Abschnitt 0 entfernt. |
+| `modules/assessment.js` | Neu: `THERAPIE_WEITERFUEHREN_OPTIONEN`, `THERAPIE_NUTZEN_OPTIONEN` (Abschnitt 6, Aufgabe 6) |
+| `modules/homes.js` | `createPatient` akzeptiert jetzt `anrede` (Abschnitt 6, Aufgabe 6) |
+| `data/normalization.js` | Neues Patientenfeld `anrede`; Arztbericht-Normalizer um `therapieWeiterfuehren`/`therapieNutzen` ergänzt und zwei Bugs behoben (`status_quo`/`keine_angabe` wurden bisher beim Speichern gelöscht) |
+| `ui/views.js` | Kamera/OCR entfernt; Arzt-Autocomplete-Dropdown; ICD-10-Feld-2-Formatierung; neue `showArztberichtView` (Schnellzugriff Arztbericht); Therapiebericht-Fixtext + Alle-Assessments + neue Fragen; Assessment-Zusammenfassung; App-Name "FaSt App" (Abschnitt 6, alle Aufgaben) |
 | `.githooks/pre-commit` + `scripts/bump-version.js` | Automatischer Versions-Bump. Einmalige Einrichtung pro Klon: `git config core.hooksPath .githooks` |
-| `viewer/index.html` | **Umgebaut (Abschnitt 0)** – eigenständiger Offline-Viewer, liest jetzt PIN-geschützte `appData.json` statt praxispasswort-verschlüsselter Daten; UI/Feature-Umfang selbst unverändert (wird laut Nutzer in separater Session weitergebaut) |
+| `viewer/index.html` | **Umgebaut (Abschnitt 6, Aufgabe 7)** – PIN-Sperre beim Öffnen, neue Tabs "Kilometer" und "Abgabelisten", "Patienten"-Tab in "Einrichtung / Patient" umbenannt |
 
 Zweites Repo `verordnungschecker-entwicklung`: unverändert.
 
@@ -163,7 +194,7 @@ Zweites Repo `verordnungschecker-entwicklung`: unverändert.
 ## 5. Empfohlener nächster Schritt für die neue Session
 
 1. GitHub-Push-Berechtigung klären, dann alle Commits pushen oder die bereitgestellte komplette-App-ZIP manuell einspielen lassen.
-2. **Vom Nutzer: Rückmeldung einholen, ob der zurückgebaute Gesamtbild-Scan (Abschnitt 0b) tatsächlich besser erkennt als die vorherige Feld-für-Feld-Erkennung** (Kamera-Aufnahme, echtes Muster-13-Rezept, siehe Abschnitt 3, Punkt 2).
-3. **Vom Nutzer: bestätigen lassen, dass die tägliche Viewer-Backup-E-Mail bei physio_fast@gmx.de ankommt** und sich mit der PIN 1550 öffnen lässt (siehe Abschnitt 3, Punkt 3) – erste echte Zustellung außerhalb der Sandbox noch nicht bestätigt.
-4. Mit dem Nutzer die übrigen offenen Punkte aus Abschnitt 3 durchgehen.
-5. Warten auf die separate Viewer-Session (Weiterbau der Viewer-Oberfläche selbst).
+2. **Vom Nutzer: die 8 Aufgaben aus Abschnitt 6 im echten Betrieb ausprobieren** und Rückmeldung geben, insbesondere Arzt-Autocomplete, Anrede-Feld/Therapiebericht-Fixtext und die neuen Viewer-Tabs (siehe Abschnitt 3, Punkt 3).
+3. **Vom Nutzer: bestätigen lassen, dass die tägliche Viewer-Backup-E-Mail bei physio_fast@gmx.de ankommt** und sich mit der PIN 1550 im (jetzt PIN-gesperrten) Viewer öffnen lässt.
+4. Bei Bedarf: Bearbeitungsmöglichkeit für das Anrede-Feld bei Bestandspatienten ergänzen (siehe Abschnitt 3, Punkt 5).
+5. Mit dem Nutzer die übrigen offenen Punkte aus Abschnitt 3 durchgehen.
