@@ -1,6 +1,6 @@
 FaSt App – Vollständiger App-Stand für ein GitHub-Repo
 ================================================================
-Stand: 2026-08-22, siebte Session inkl. Nachtrag, Version 3.9.30
+Stand: 2026-08-22, siebte Session inkl. zwei Nachträgen, Version 3.9.31
 
 Diese ZIP enthält den KOMPLETTEN, lauffähigen und getesteten Stand der
 App (alle Dateien außer dem separaten Viewer), direkt aus der
@@ -11,27 +11,21 @@ Der Viewer wird wie gewünscht separat als eigene Datei bereitgestellt
 
 Neu in dieser Version
 ----------------------------------------------------------------------
-1. Unterschriftenblatt öffnet sich jetzt zuverlässig als PDF und lässt
-   sich direkt über einen eigenen "Drucken"-Button drucken/als PDF
-   speichern - auch in der installierten App.
-2. WICHTIG - EmailJS komplett entfernt: Der automatische
-   Hintergrundversand des Viewer-Backups per E-Mail gibt es nicht
-   mehr. Stattdessen erscheint beim Öffnen der App eine
-   Backup-Erinnerung (aktuell täglich zum Testen, künftig alle 4
-   Wochen), sobald das Intervall abgelaufen ist. Der Therapeut wählt
-   dort selbst:
-   - "Als Datei herunterladen" - lädt die PIN-geschützte (1550)
-     Backup-ZIP direkt herunter.
-   - "Per E-Mail senden" - lädt die ZIP ebenfalls herunter UND öffnet
-     das E-Mail-Programm mit vorbereitetem Betreff/Text an
-     physio_fast@gmx.de. Die heruntergeladene Datei muss dabei manuell
-     an die E-Mail angehängt werden (aus Sicherheitsgründen können
-     Browser das nicht automatisch).
-   - "Später erinnern" - die Erinnerung erscheint beim nächsten
-     Öffnen der App erneut.
-   Im Dashboard gibt es dafür einen Bereich "Backup-Erinnerung" mit
-   Status, Verlauf und einem Button "Jetzt Backup machen" für den
-   Bedarfsfall.
+1. Unterschriftenblatt: Android-Druckbug behoben. Öffnet sich jetzt
+   direkt im nativen PDF-Betrachter des Browsers (statt in einem
+   eigenen Wrapper-Fenster) - dort funktioniert Drucken/Teilen
+   zuverlässig, auch auf Android-Geräten.
+2. EmailJS komplett entfernt: Der automatische Hintergrundversand des
+   Viewer-Backups per E-Mail gibt es nicht mehr. Stattdessen erscheint
+   beim Öffnen der App eine Backup-Erinnerung (aktuell täglich zum
+   Testen, künftig alle 4 Wochen), sobald das Intervall abgelaufen
+   ist, mit drei Optionen: Backup herunterladen, per E-Mail senden
+   (öffnet das E-Mail-Programm, Anhang muss manuell hinzugefügt
+   werden - Betreff einfach "Backup <Therapeutenname>"), oder später
+   erinnern.
+3. Texte in der Backup-Erinnerung gekürzt: keine PIN-Erklärung mehr im
+   Hinweis-Fenster, im Dashboard-Bereich "Backup-Erinnerung" zeigt der
+   Verlauf jetzt nur noch Datum/Uhrzeit ohne Erklärtext.
 
 So laden Sie ein neues GitHub-Repo hoch
 ------------------------------------------
@@ -67,7 +61,7 @@ Datei "modules/autoExport.js" existiert in dieser Version nicht mehr
 (durch "modules/backupReminder.js" ersetzt) - falls sie in Ihrem
 bestehenden Repo noch vorhanden ist, bitte manuell löschen.
 
-Details siehe HANDOFF_SUMMARY.md, Abschnitt "7b".
+Details siehe HANDOFF_SUMMARY.md, Abschnitt "7c" (aktuellster Stand).
 
 Deployment (z.B. Netlify)
 --------------------------

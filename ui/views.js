@@ -1660,7 +1660,7 @@ export function showBackupReminderModal({ onDone } = {}) {
   overlay.innerHTML = `
     <div class="card" style="max-width:420px; width:100%; margin:0;">
       <h3>🔔 Backup-Erinnerung</h3>
-      <p class="muted">Für den separaten Offline-Viewer sollte regelmäßig ein Backup aller Praxisdaten erstellt werden. Die Datei ist mit der PIN <strong>1550</strong> geschützt.</p>
+      <p class="muted">Für den separaten Offline-Viewer sollte regelmäßig ein Backup aller Praxisdaten erstellt werden.</p>
       <div class="row" style="flex-direction:column; gap:10px; margin-top:16px;">
         <button id="backupReminderDownloadBtn" style="margin-top:0;">Als Datei herunterladen</button>
         <button id="backupReminderMailBtn" class="secondary" style="margin-top:0;">Per E-Mail senden (mailto)</button>
@@ -1827,57 +1827,20 @@ function openLetterPreview(title, bodyHtml) {
   openHtmlDocument(title, bodyHtml, { autoPrint: false });
 }
 
-async function openPdfPreview(title, pdfUrl) {
-  const win = window.open("", "_blank", "width=900,height=700");
-  if (!win) {
-    alert("Fenster konnte nicht geöffnet werden. Bitte Pop-up-Blocker für diese Seite erlauben.");
-    return;
-  }
-
-  win.document.write(`
-    <!DOCTYPE html>
-    <html lang="de">
-    <head>
-      <meta charset="UTF-8">
-      <title>${escapeHtml(title)}</title>
-      <style>
-        html, body{ margin:0; padding:0; height:100%; font-family: Arial, sans-serif; }
-        .toolbar{
-          display:flex; gap:12px; padding:10px 14px;
-          background:#f3f4f6; border-bottom:1px solid #d1d5db;
-        }
-        button{
-          border:0; border-radius:8px; padding:10px 14px; cursor:pointer;
-          background:#2563eb; color:white; font-weight:600;
-        }
-        button.secondary{ background:#e5e7eb; color:#111827; }
-        button:disabled{ opacity:0.5; cursor:default; }
-        iframe{ border:0; width:100%; height:calc(100% - 54px); display:block; }
-        .msg{ padding:20px; color:#6b7280; }
-        .msg.error{ color:#b91c1c; }
-        @media print{
-          .toolbar{ display:none; }
-          iframe{ height:100vh; }
-        }
-      </style>
-    </head>
-    <body>
-      <div class="toolbar">
-        <button id="printBtn" disabled>Drucken / als PDF speichern</button>
-        <button class="secondary" id="closeBtn">Schließen</button>
-      </div>
-      <div class="msg">PDF wird geladen …</div>
-    </body>
-    </html>
-  `);
-  win.document.close();
-  win.document.getElementById("closeBtn").onclick = () => win.close();
-
-  let objectUrl = null;
-  win.addEventListener("beforeunload", () => {
-    if (objectUrl) URL.revokeObjectURL(objectUrl);
-  });
-
+// Android Chrome (u.a. auch als installierte Standalone-PWA) rendert ein
+// per <iframe src="blob:..."> eingebettetes PDF beim Drucken nicht korrekt:
+// die Seitenzahl wird zwar richtig erkannt, aber jede Seite erscheint im
+// Druckdialog nur als generisches Datei-Platzhalter-Symbol statt des
+// tatsächlichen Seiteninhalts (per echtem Gerätetest bestätigt - ein reiner
+// Desktop-/Headless-Test kann diesen gerätespezifischen Rendering-Bug nicht
+// aufdecken, da dort das iframe strukturell korrekt geladen erscheint).
+// Fix: das PDF nicht mehr einbetten, sondern das neue Fenster/den neuen Tab
+// direkt auf die PDF-Datei selbst navigieren lassen - dann übernimmt der
+// eingebaute PDF-Betrachter des Browsers (der als Hauptinhalt einer Seite
+// zuverlässig funktioniert, inkl. eigener Drucken-/Teilen-Symbole) Anzeige
+// und Druck vollständig selbst, ohne eigene Wrapper-Seite/eigenen
+// Drucken-Button.
+async function openPdfPreview(pdfUrl) {
   try {
     const response = await fetch(pdfUrl);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -1885,39 +1848,14 @@ async function openPdfPreview(title, pdfUrl) {
     if (!/pdf/i.test(blob.type) && !/\.pdf(\?|$)/i.test(pdfUrl)) {
       throw new Error("Antwort war kein PDF");
     }
-    objectUrl = URL.createObjectURL(blob);
-
-    if (win.closed) {
-      URL.revokeObjectURL(objectUrl);
-      return;
+    const objectUrl = URL.createObjectURL(blob);
+    const win = window.open(objectUrl, "_blank");
+    if (!win) {
+      alert("Fenster konnte nicht geöffnet werden. Bitte Pop-up-Blocker für diese Seite erlauben.");
     }
-
-    const msgEl = win.document.querySelector(".msg");
-    if (msgEl) msgEl.remove();
-
-    const iframe = win.document.createElement("iframe");
-    iframe.src = objectUrl;
-    win.document.body.appendChild(iframe);
-
-    const printBtn = win.document.getElementById("printBtn");
-    printBtn.disabled = false;
-    printBtn.onclick = () => {
-      try {
-        iframe.contentWindow.focus();
-        iframe.contentWindow.print();
-      } catch (err) {
-        console.error("Drucken über iframe fehlgeschlagen, Fallback:", err);
-        win.print();
-      }
-    };
   } catch (err) {
     console.error("PDF konnte nicht geladen werden:", err);
-    if (win.closed) return;
-    const msgEl = win.document.querySelector(".msg");
-    if (msgEl) {
-      msgEl.classList.add("error");
-      msgEl.textContent = "Das PDF konnte nicht geladen werden. Bitte Internetverbindung prüfen und erneut versuchen.";
-    }
+    alert("Das PDF konnte nicht geladen werden. Bitte Internetverbindung prüfen und erneut versuchen.");
   }
 }
 
@@ -2801,8 +2739,7 @@ function formatBackupReminderHistoryLine(entry) {
   const time = entry.createdAt ? new Date(entry.createdAt).toLocaleString("de-DE") : "";
   const icon = entry.status === "handled" ? "✅" : "⏭";
   return `<div class="row" style="padding:6px 0;">
-    <div><strong>${icon} ${escapeHtml(time)}</strong></div>
-    <div class="muted" style="font-size:13px; word-break:break-word;">${escapeHtml(entry.message || "")}</div>
+    <strong>${icon} ${escapeHtml(time)}</strong>
   </div>`;
 }
 
@@ -2819,7 +2756,6 @@ function renderBackupReminderAccordion(runtimeData) {
         <span class="muted">${escapeHtml(statusSummary)}</span>
       </summary>
       <div class="accordion-body">
-        <p class="muted">Regelmäßige Erinnerung an ein PIN-geschütztes Backup für den separaten Viewer. Erscheint beim Öffnen der App, sobald das Intervall abgelaufen ist - Download und/oder E-Mail-Versand erledigt der Therapeut dabei selbst per Klick.</p>
         <p class="muted">${escapeHtml(lastAt ? `Zuletzt erledigt: ${new Date(lastAt).toLocaleString("de-DE")}` : "Noch nicht erledigt.")}</p>
         <button id="backupReminderNowBtn" class="secondary" style="margin-top:0;">Jetzt Backup machen</button>
         ${history.length ? `
@@ -3005,7 +2941,7 @@ export function showDashboardView({ onLock, keepOverviewOpen = false } = {}) {
   document.getElementById("openNachbestellBtn").onclick = () => showNachbestellungView({ onLock });
   document.getElementById("openKilometerBtn").onclick = () => showKilometerView({ onLock });
   document.getElementById("openUnterschriftenblattBtn").onclick = () => {
-    openPdfPreview("Unterschriftenblatt", "./vorlagen/unterschriftenblatt.pdf");
+    openPdfPreview("./vorlagen/unterschriftenblatt.pdf");
   };
   document.getElementById("openSupportBtn").onclick = () => {
     window.open("https://physiofast.wixsite.com/fast-support", "_blank");

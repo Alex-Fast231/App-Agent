@@ -97,15 +97,8 @@ export async function buildBackupZip(runtimeData) {
 // muss vorher separat heruntergeladen und dann vom Therapeuten manuell an
 // die geöffnete E-Mail angehängt werden. Der Text weist darauf explizit hin.
 export function buildBackupReminderMailtoLink({ filename, therapistName }) {
-  const subject = `FaSt-Doku Viewer-Backup – ${therapistName || "Therapeut"}`;
-  const body = [
-    `Backup von ${therapistName || "Therapeut"} für den FaSt-Doku Viewer.`,
-    "",
-    `Bitte die soeben heruntergeladene Datei "${filename}" manuell an diese E-Mail anhängen, bevor Sie sie senden`,
-    "(aus Sicherheitsgründen können Browser Dateianhänge nicht automatisch in eine E-Mail einfügen).",
-    "",
-    "Die ZIP-Datei ist mit der PIN 1550 geschützt."
-  ].join("\n");
+  const subject = `Backup ${therapistName || "Therapeut"}`;
+  const body = `Bitte die soeben heruntergeladene Datei "${filename}" manuell anhängen.`;
   return `mailto:${BACKUP_REMINDER_TARGET_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 

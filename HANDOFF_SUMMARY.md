@@ -1,6 +1,6 @@
 # FaSt App – Handoff Summary
-**Stand:** 2026-08-22 (Session-Ende, siebte Session inkl. Nachtrag: EmailJS komplett entfernt, Backup-Erinnerung mit mailto/Download eingeführt)
-**Branch:** `claude/fast-app-8-features-xep6yr` (in `/workspace/app-test`, lokal, **56 Commits, weiterhin nicht auf GitHub gepusht (403, siehe Abschnitt 3)**)
+**Stand:** 2026-08-22 (Session-Ende, siebte Session inkl. zwei Nachträgen: EmailJS entfernt, Android-Druckbug beim Unterschriftenblatt behoben, Texte gekürzt)
+**Branch:** `claude/fast-app-8-features-xep6yr` (in `/workspace/app-test`, lokal, **57 Commits, weiterhin nicht auf GitHub gepusht (403, siehe Abschnitt 3)**)
 
 Diese Datei ersetzt die vorherige Version vom 2026-08-22 (sechste Session) vollständig. Die sechste Session (8 vorgegebene Aufgaben) bleibt unten in Abschnitt 6 als historische Dokumentation stehen.
 
@@ -71,6 +71,23 @@ Direkt im Anschluss an Abschnitt 7 gab der Nutzer die Rückmeldung: EmailJS soll
 **Getestet:** Zwei neue Playwright-Tests: `smoketest_backup_reminder.mjs` (10/10 - Erinnerung erscheint automatisch beim ersten Start, alle drei Buttons vorhanden, "Später erinnern" schließt ohne Aktion, "Jetzt Backup machen" im Dashboard öffnet erneut, Download-Button löst echten Datei-Download aus, 0 Requests an emailjs.com, Erinnerung erscheint am selben Tag nach Erledigung nicht erneut, Verlauf zeigt korrekten Eintrag) und `smoketest_backup_reminder_mailto.mjs` (4/4 - "Per E-Mail senden" lädt die ZIP zusätzlich herunter, Hinweistext zum manuellen Anhängen, keine Page-Errors durch den mailto-Navigationsversuch, Verlauf dokumentiert den Weg korrekt). Volle bestehende Regressionssuite erneut durchlaufen (18 betroffene Testdateien mussten dafür um einen Zeilen-Dismiss des neuen Modals nach der Ersteinrichtung ergänzt werden, da die Erinnerung jetzt bei jedem ersten Öffnen blockierend erscheint) - alle grün, keine Regression. Die alten EmailJS-spezifischen Tests (`smoketest_autoexport_aufgabe2.mjs`, `smoketest_autoexport_networkfail.mjs`, `smoketest_viewer_autoexport.mjs`, `smoketest_autoexport_task2.mjs`) sind durch die Entfernung hinfällig geworden und wurden nicht weiter gepflegt.
 
 **Wichtiger Verhaltenshinweis:** Da die Erinnerung als blockierendes Modal **bei jedem Öffnen der App** erscheint, sobald das Intervall abgelaufen ist (aktuell täglich zum Testen), sieht der Therapeut sie potenziell mehrmals am Tag, falls er die App mehrfach öffnet, ohne "Später erinnern" wegzuklicken oder ein Backup zu erledigen - das ist beabsichtigt (Vorgabe: "soll... beim Öffnen direkt erscheinen"), aber dem Nutzer explizit mitzuteilen, falls das im Testbetrieb als störend empfunden wird.
+
+---
+
+## 7c. Zweiter Nachtrag (gleiche Sitzung): Android-Druckbug beim Unterschriftenblatt behoben, Texte gekürzt
+
+Der Nutzer schickte einen Screenshot vom echten Gerät (Android): Klick auf "Unterschriften" öffnete zwar einen Android-Druckdialog mit korrekt erkannter Seitenzahl ("1/2"), aber jede Seite zeigte nur ein generisches Datei-Platzhaltersymbol (Icon + zufällige Blob-UUID + "Öffnen") statt des tatsächlichen Formularinhalts.
+
+**Ursache:** Der in Abschnitt 7 gebaute Fix (`openPdfPreview()`) bettete das PDF per `<iframe src="blob:...">` in ein selbst geschriebenes Wrapper-Fenster ein und rief beim Klick auf einen eigenen "Drucken"-Button `iframe.contentWindow.print()` auf. Auf Android Chrome (bestätigt durch den Screenshot) wird ein per iframe eingebettetes PDF-Blob zwar strukturell korrekt geladen (die Seitenzahl wird richtig erkannt), aber beim Drucken nicht korrekt rasterisiert - der Druckdialog zeigt stattdessen nur einen generischen Anhang-Platzhalter pro Seite. Das ist ein gerätespezifisches Rendering-Verhalten, das aus einer Desktop-/Headless-Testumgebung heraus nicht erkennbar war (dort erscheint das iframe strukturell fehlerfrei geladen) - exakt die Art Bug, die nur durch einen echten Gerätetest auffällt.
+
+**Fix:** `openPdfPreview()` in `ui/views.js` grundlegend vereinfacht - kein Wrapper-Fenster, kein iframe, kein eigener Drucken-Button mehr. Stattdessen wird das neu geöffnete Fenster direkt (top-level) auf die PDF-Blob-URL navigiert: `window.open(objectUrl, "_blank")`. Dadurch übernimmt der eingebaute PDF-Betrachter des Browsers - der als Hauptinhalt einer Seite zuverlässig funktioniert - Anzeige und Druck vollständig selbst, inklusive seiner eigenen nativen Drucken-/Teilen-/Herunterladen-Symbole.
+
+**Zusätzlich auf Nutzerwunsch gekürzt:**
+- Backup-Erinnerung-Modal: der Satz mit der PIN-Erwähnung ("Die Datei ist mit der PIN 1550 geschützt.") entfernt, der übrige Hinweistext bleibt.
+- mailto-Text (`buildBackupReminderMailtoLink` in `modules/backupReminder.js`): auf das Nötigste gekürzt - Betreff jetzt nur noch `Backup <Therapeutenname>`, Text nur noch der Hinweis, die heruntergeladene Datei manuell anzuhängen (vorher: längerer Text mit "FaSt-Doku Viewer"-Erwähnung und PIN-Hinweis).
+- Dashboard-Bereich "Backup-Erinnerung": der einleitende Erklärungstext ("Regelmäßige Erinnerung an ein PIN-geschütztes Backup...") entfernt; die Verlaufseinträge zeigen jetzt nur noch Symbol + Datum/Uhrzeit, keinen Nachrichtentext mehr darunter.
+
+**Getestet:** `smoketest_unterschriftenblatt.mjs` angepasst und weiterhin grün (2/2) - prüft jetzt, dass das neue Fenster direkt auf eine `blob:`-URL navigiert statt ein iframe zu laden. `smoketest_backup_reminder.mjs` (11/11, neue Prüfung: Modal erwähnt "PIN" nirgends mehr) und `smoketest_backup_reminder_mailto.mjs` (4/4, angepasst: Verlauf zeigt nur noch den ✅-Eintrag ohne Nachrichtentext) weiterhin grün. Volle Regressionssuite erneut durchlaufen (18 Testdateien) - alle grün, keine Regression.
 
 ---
 
