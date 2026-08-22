@@ -1,7 +1,7 @@
 import { generateId } from "../core/utils.js";
 
 export const APP_SCHEMA_VERSION = 3;
-export const APP_VERSION = "3.9.20";
+export const APP_VERSION = "3.9.22";
 export const APP_MODULE = "doku";
 
 export const PRACTICE_ADDRESS = ``;

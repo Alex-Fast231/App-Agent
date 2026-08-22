@@ -1,12 +1,19 @@
 FaSt-Doku – Vollständiger App-Stand für ein neues GitHub-Repo
 ================================================================
-Stand: 2026-08-20, fünfte Session (Fax/PDF-Upload-Rückbau + tägliches
-Viewer-Backup per E-Mail), Version 3.9.20
+Stand: 2026-08-20, fünfte Session (OCR-Region-of-Interest-Rückbau),
+Version 3.9.22
 
 Diese ZIP enthält den KOMPLETTEN, lauffähigen und getesteten Stand der
-App (alle 43 Dateien), direkt aus der getesteten Arbeitsumgebung
+App (alle 41 Dateien), direkt aus der getesteten Arbeitsumgebung
 exportiert. Kein Zusammenfügen mit älteren ZIPs nötig – einfach diese
 verwenden.
+
+Der Viewer wird jetzt separat als eigene Datei bereitgestellt (siehe
+Ihre vorherige Anfrage) - diese ZIP hier ist NUR die Haupt-App. Falls
+Sie den Viewer brauchen: bitte die separat verschickte
+FaSt-Doku-Viewer.zip verwenden (enthält index.html + zip-full.min.js).
+Der Vollständigkeit halber ist viewer/ trotzdem auch in dieser
+kompletten App-ZIP enthalten, da er Teil desselben Repos ist.
 
 So laden Sie ein neues GitHub-Repo hoch
 ------------------------------------------
@@ -37,41 +44,19 @@ Weiterentwicklung mit automatischer Versionserhöhung):
 
 Wenn Sie stattdessen ein BESTEHENDES Repo aktualisieren möchten:
 einfach alle Dateien aus dieser ZIP über die bestehenden Dateien im
-Repo kopieren/hochladen (überschreiben) und committen. Achtung: der
-Ordner "vendor/pdfjs" existiert in dieser Version nicht mehr (siehe
-unten) – falls er in Ihrem bestehenden Repo noch vorhanden ist, bitte
-manuell löschen.
+Repo kopieren/hochladen (überschreiben) und committen. Achtung: die
+Dateien "modules/ocrRegions.js" und "modules/ocrMarkDetection.js"
+existieren in dieser Version nicht mehr – falls sie in Ihrem
+bestehenden Repo noch vorhanden sind, bitte manuell löschen.
 
 Neu in dieser Version (gegenüber der letzten ZIP)
 ----------------------------------------------------
-1. Der "Fax/PDF hochladen"-Button wurde wieder ENTFERNT (Rückmeldung:
-   empfangene Faxe sind oft verschoben/schlecht leserlich, kein echter
-   Mehrwert). Die Kamera-Aufnahme bleibt unverändert die einzige
-   Fotoerkennung. Der vendorierte PDF.js-Ordner wurde komplett entfernt.
-2. NEU: Tägliches automatisches Backup für den separaten Offline-
-   Viewer. Läuft im Hintergrund direkt nach jedem Entsperren der App
-   (wenn seit dem letzten Versand mind. 1 Tag vergangen ist), ohne
-   Rückfrage. Es wird eine ZIP-Datei mit einer einzigen JSON-Datei
-   (alle App-Daten) per E-Mail an physio_fast@gmx.de geschickt. Die
-   ZIP ist mit der PIN 1550 entsperrbar (auch im mitgelieferten
-   viewer/index.html, das jetzt nach der PIN statt nach dem
-   Praxispasswort fragt).
-
-   WICHTIG - Sicherheitshinweis: Eine 4-stellige PIN ist deutlich
-   schwächer als ein echtes Passwort. Falls die E-Mail abgefangen
-   würde, ließe sich die ZIP mit vertretbarem Aufwand per Brute-Force
-   öffnen. Das ist eine bewusste, von Ihnen gewünschte Abwägung
-   zwischen einfacher Bedienbarkeit im Viewer und Schutzstärke.
-
-   Das manuelle "Backup exportieren/importieren" in den Einstellungen
-   (weiterhin mit dem echten Praxispasswort) ist davon nicht
-   betroffen und funktioniert unverändert.
-
-Details siehe HANDOFF_SUMMARY.md, Abschnitt "0" (oben) - dort auch der
-Hinweis, dass die tatsächliche Zustellung der ersten Backup-E-Mail
-noch nicht außerhalb der Entwicklungsumgebung bestätigt wurde (bitte
-nach dem nächsten Entsperren der App im Postfach physio_fast@gmx.de
-prüfen).
+Die OCR-Fotoerkennung wurde auf Ihre Rückmeldung hin zurückgebaut:
+statt die einzelnen Formularfelder per Ausrichtungsrahmen und
+Feld-für-Feld-Zuschnitt zu erkennen, wird beim Fotografieren jetzt
+wieder EIN Tesseract-Durchlauf über das komplette Foto gemacht (wie
+vor der Feld-für-Feld-Umstellung). Kein Ausrichtungsrahmen mehr in der
+Kamera-Vorschau. Details siehe HANDOFF_SUMMARY.md, Abschnitt "0b".
 
 Deployment (z.B. Netlify)
 --------------------------
