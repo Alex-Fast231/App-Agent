@@ -1,17 +1,28 @@
-FaSt-Doku – Vollständiger App-Stand für ein neues GitHub-Repo
+FaSt App – Vollständiger App-Stand für ein GitHub-Repo
 ================================================================
-Stand: 2026-08-22, sechste Session (8 vorgegebene Aufgaben komplett
-umgesetzt), Version 3.9.27
+Stand: 2026-08-22, siebte Session, Version 3.9.29
 
 Diese ZIP enthält den KOMPLETTEN, lauffähigen und getesteten Stand der
-App (alle 34 Dateien), direkt aus der getesteten Arbeitsumgebung
-exportiert. Kein Zusammenfügen mit älteren ZIPs nötig – einfach diese
-verwenden.
+App (alle Dateien außer dem separaten Viewer), direkt aus der
+getesteten Arbeitsumgebung exportiert.
 
 Der Viewer wird wie gewünscht separat als eigene Datei bereitgestellt
-(FaSt-Doku-Viewer-v2.zip) - diese ZIP hier ist die Haupt-App. Der
-Vollständigkeit halber ist viewer/ trotzdem auch in dieser kompletten
-App-ZIP enthalten, da er Teil desselben Repos ist.
+(FaSt-Viewer.zip) - diese ZIP hier ist ausschließlich die Haupt-App.
+
+Neu in dieser Version (gegenüber der letzten ZIP) – die 2 Aufgaben
+----------------------------------------------------------------------
+1. Unterschriftenblatt öffnet sich jetzt zuverlässig als PDF und lässt
+   sich direkt über einen eigenen "Drucken"-Button drucken/als PDF
+   speichern - auch in der installierten App (vorher fehlte dort das
+   nötige Browser-Menü dafür).
+2. Automatischer Viewer-Export per E-Mail: im Dashboard gibt es jetzt
+   einen neuen Bereich "Automatischer Viewer-Export" mit Status,
+   Verlauf der letzten Versandversuche und einem "Jetzt senden
+   (Test)"-Button. Falls der Versand weiterhin fehlschlägt, wird jetzt
+   eine konkrete, im EmailJS-Konto nachprüfbare Fehlermeldung
+   angezeigt statt eines unsichtbaren Fehlschlags. Details und die vom
+   Nutzer im EmailJS-Dashboard zu prüfenden Punkte siehe
+   HANDOFF_SUMMARY.md, Abschnitt 7.
 
 So laden Sie ein neues GitHub-Repo hoch
 ------------------------------------------
@@ -42,43 +53,14 @@ Weiterentwicklung mit automatischer Versionserhöhung):
 
 Wenn Sie stattdessen ein BESTEHENDES Repo aktualisieren möchten:
 einfach alle Dateien aus dieser ZIP über die bestehenden Dateien im
-Repo kopieren/hochladen (überschreiben) und committen. Achtung: der
-Ordner "vendor/tesseract" und die Datei "modules/ocr.js" existieren in
-dieser Version nicht mehr (Kamera/OCR wurde komplett entfernt) – falls
-sie in Ihrem bestehenden Repo noch vorhanden sind, bitte manuell
-löschen.
+Repo kopieren/hochladen (überschreiben) und committen.
 
-Neu in dieser Version (gegenüber der letzten ZIP) – die 8 Aufgaben
-----------------------------------------------------------------------
-1. OCR/Kamera komplett entfernt – nur noch manuelle Eingabe beim
-   Anlegen von Patient + Rezept.
-2. Arzt-Autocomplete: Beim Tippen im Arzt-Feld erscheint jetzt
-   zuverlässig ein Dropdown mit passenden, bereits gespeicherten
-   Ärzten; Auswahl füllt Adresse/PLZ/Ort automatisch aus.
-3. Automatische Punktsetzung funktioniert jetzt auch beim zweiten
-   ICD-10-Feld.
-4. Der tägliche automatische Backup-Versand prüft jetzt nach
-   Kalendertagen (Mitternacht), nicht mehr nach vollen 24 Stunden seit
-   dem letzten Versand. Kurzer Hinweis "Daten abgeschickt" nach
-   erfolgtem Versand (nur für den aktuellen Testbetrieb).
-5. Im Assessment-Einstieg gibt es jetzt einen Button "Letztes
-   Assessment ansehen", falls für den Patienten bereits eines
-   durchgeführt wurde.
-6. Therapiebericht überarbeitet: automatische Einleitung mit
-   Patientendaten, alle bisherigen Assessments statt nur des letzten,
-   zwei neue Fragen (Therapie weiterführen? / Nutzen?), und ein
-   Schnellzugriff-Button "Arztbericht" direkt in der Patientenliste.
-   Dafür neues Patientenfeld "Anrede" beim Anlegen.
-7. Viewer überarbeitet (siehe separate FaSt-Doku-Viewer-v2.zip): PIN-
-   Sperre beim Öffnen, neue Tabs "Kilometer" und "Abgabelisten".
-8. App-Name im Header von "FaSt-Doku" auf "FaSt App" geändert.
-
-Details siehe HANDOFF_SUMMARY.md, Abschnitt "6".
+Details siehe HANDOFF_SUMMARY.md, Abschnitt "7".
 
 Deployment (z.B. Netlify)
 --------------------------
-netlify.toml ist korrekt benannt und enthält die SPA-Weiterleitung
-sowie das Cache-Verhalten für sw.js.
+netlify.toml enthält jetzt zusätzlich eine explizite Regel, die
+/vorlagen/* von der SPA-Weiterleitung ausnimmt (siehe Aufgabe 1 oben).
 
 Bei Fragen oder falls nach dem Hochladen etwas nicht funktioniert:
 bitte mit genauer Fehlerbeschreibung/Screenshot zurückmelden.

@@ -1,6 +1,6 @@
 import { openDatabase } from "../storage/indexeddb.js";
 import { hasSecuritySetup, loadCryptoMeta, loadSecurityState } from "../storage/secure-store.js";
-import { setCryptoMeta, setSecurityState, getRuntimeData } from "./app-core.js";
+import { setCryptoMeta, setSecurityState, getRuntimeData, getCurrentView } from "./app-core.js";
 import { createAutoLockController } from "../security/lock.js";
 import { APP_VERSION } from "../data/schema.js";
 import { runAutoExportIfDue } from "../modules/autoExport.js";
@@ -104,12 +104,24 @@ function handleUnlocked() {
 // sobald der tägliche Versand zuverlässig bestätigt ist.
 function triggerAutoExportIfDue() {
   const runtimeData = getRuntimeData();
-  if (!runtimeData) return;
+  if (!runtimeData) {
+    console.warn("Auto-Export: übersprungen, da beim Entsperren keine App-Daten im Speicher waren (runtimeData ist leer).");
+    return;
+  }
 
   runAutoExportIfDue(runtimeData)
     .then((result) => {
       if (result?.sent) {
         showToast("Daten abgeschickt");
+      }
+      // Falls der Therapeut in der Zwischenzeit weiterhin auf dem
+      // Dashboard ist, dessen Verlaufs-Anzeige mit dem frischen Ergebnis
+      // aktualisieren (die Ansicht wurde beim Entsperren gerendert, bevor
+      // dieser asynchrone Versand abgeschlossen war). Andere Ansichten
+      // (z.B. ein gerade bearbeitetes Formular) bewusst nicht neu rendern,
+      // um keine ungespeicherten Eingaben zu verwerfen.
+      if (getCurrentView() === "dashboard") {
+        resumeCurrentView({ onLock: lockApp });
       }
     })
     .catch((err) => console.error("Automatischer Export fehlgeschlagen:", err));

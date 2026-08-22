@@ -91,6 +91,7 @@ import {
 import * as Assessment from "../modules/assessment.js";
 import * as AssessmentInfo from "../modules/assessmentInfo.js";
 import { exportBackup, importBackup, downloadBlob, validateBackupZip } from "../modules/backup.js";
+import { runAutoExportIfDue } from "../modules/autoExport.js";
 import { generateId, formatPatientName } from "../core/utils.js";
 import {
   normalizeDeDateInput,
@@ -1737,6 +1738,100 @@ function openLetterPreview(title, bodyHtml) {
   openHtmlDocument(title, bodyHtml, { autoPrint: false });
 }
 
+async function openPdfPreview(title, pdfUrl) {
+  const win = window.open("", "_blank", "width=900,height=700");
+  if (!win) {
+    alert("Fenster konnte nicht geöffnet werden. Bitte Pop-up-Blocker für diese Seite erlauben.");
+    return;
+  }
+
+  win.document.write(`
+    <!DOCTYPE html>
+    <html lang="de">
+    <head>
+      <meta charset="UTF-8">
+      <title>${escapeHtml(title)}</title>
+      <style>
+        html, body{ margin:0; padding:0; height:100%; font-family: Arial, sans-serif; }
+        .toolbar{
+          display:flex; gap:12px; padding:10px 14px;
+          background:#f3f4f6; border-bottom:1px solid #d1d5db;
+        }
+        button{
+          border:0; border-radius:8px; padding:10px 14px; cursor:pointer;
+          background:#2563eb; color:white; font-weight:600;
+        }
+        button.secondary{ background:#e5e7eb; color:#111827; }
+        button:disabled{ opacity:0.5; cursor:default; }
+        iframe{ border:0; width:100%; height:calc(100% - 54px); display:block; }
+        .msg{ padding:20px; color:#6b7280; }
+        .msg.error{ color:#b91c1c; }
+        @media print{
+          .toolbar{ display:none; }
+          iframe{ height:100vh; }
+        }
+      </style>
+    </head>
+    <body>
+      <div class="toolbar">
+        <button id="printBtn" disabled>Drucken / als PDF speichern</button>
+        <button class="secondary" id="closeBtn">Schließen</button>
+      </div>
+      <div class="msg">PDF wird geladen …</div>
+    </body>
+    </html>
+  `);
+  win.document.close();
+  win.document.getElementById("closeBtn").onclick = () => win.close();
+
+  let objectUrl = null;
+  win.addEventListener("beforeunload", () => {
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
+  });
+
+  try {
+    const response = await fetch(pdfUrl);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const blob = await response.blob();
+    if (!/pdf/i.test(blob.type) && !/\.pdf(\?|$)/i.test(pdfUrl)) {
+      throw new Error("Antwort war kein PDF");
+    }
+    objectUrl = URL.createObjectURL(blob);
+
+    if (win.closed) {
+      URL.revokeObjectURL(objectUrl);
+      return;
+    }
+
+    const msgEl = win.document.querySelector(".msg");
+    if (msgEl) msgEl.remove();
+
+    const iframe = win.document.createElement("iframe");
+    iframe.src = objectUrl;
+    win.document.body.appendChild(iframe);
+
+    const printBtn = win.document.getElementById("printBtn");
+    printBtn.disabled = false;
+    printBtn.onclick = () => {
+      try {
+        iframe.contentWindow.focus();
+        iframe.contentWindow.print();
+      } catch (err) {
+        console.error("Drucken über iframe fehlgeschlagen, Fallback:", err);
+        win.print();
+      }
+    };
+  } catch (err) {
+    console.error("PDF konnte nicht geladen werden:", err);
+    if (win.closed) return;
+    const msgEl = win.document.querySelector(".msg");
+    if (msgEl) {
+      msgEl.classList.add("error");
+      msgEl.textContent = "Das PDF konnte nicht geladen werden. Bitte Internetverbindung prüfen und erneut versuchen.";
+    }
+  }
+}
+
 function formatIsoDateShort(value) {
   const date = value ? new Date(value) : new Date();
   if (Number.isNaN(date.getTime())) return formatCurrentDateShort(new Date());
@@ -2613,6 +2708,46 @@ export function showSettingsView({ onLock }) {
   };
 }
 
+function formatAutoExportHistoryLine(entry) {
+  const time = entry.createdAt ? new Date(entry.createdAt).toLocaleString("de-DE") : "";
+  const icon = entry.status === "sent" ? "✅" : "❌";
+  return `<div class="row" style="padding:6px 0;">
+    <div><strong>${icon} ${escapeHtml(time)}</strong></div>
+    <div class="muted" style="font-size:13px; word-break:break-word;">${escapeHtml(entry.message || "")}</div>
+  </div>`;
+}
+
+function renderAutoExportAccordion(runtimeData) {
+  const history = Array.isArray(runtimeData?.autoExportHistory) ? runtimeData.autoExportHistory : [];
+  const last = history[0];
+  const lastAt = runtimeData?.ui?.lastAutoExportAt || "";
+
+  const statusSummary = last
+    ? (last.status === "sent" ? "Zuletzt erfolgreich" : "Zuletzt fehlgeschlagen")
+    : "Noch kein Versand";
+
+  return `
+    <details class="accordion">
+      <summary>
+        <span>Automatischer Viewer-Export</span>
+        <span class="muted">${escapeHtml(statusSummary)}</span>
+      </summary>
+      <div class="accordion-body">
+        <p class="muted">Tägliches automatisches PIN-geschütztes Backup per E-Mail für den separaten Viewer. Läuft automatisch beim Öffnen der App im Hintergrund, ohne Rückfrage.</p>
+        <p class="muted">${escapeHtml(lastAt ? `Letzter erfolgreicher Versand: ${new Date(lastAt).toLocaleString("de-DE")}` : "Noch kein erfolgreicher automatischer Versand.")}</p>
+        <button id="autoExportTestBtn" class="secondary" style="margin-top:0;">Jetzt senden (Test)</button>
+        <div id="autoExportMsg" class="muted" style="margin-top:12px;"></div>
+        ${history.length ? `
+          <div style="margin-top:16px;">
+            <div class="muted" style="font-weight:600; margin-bottom:4px;">Verlauf (letzte ${Math.min(history.length, 5)}):</div>
+            ${history.slice(0, 5).map(formatAutoExportHistoryLine).join("")}
+          </div>
+        ` : ""}
+      </div>
+    </details>
+  `;
+}
+
 export function showDashboardView({ onLock, keepOverviewOpen = false } = {}) {
   bindLockButton(onLock);
   setCurrentView("dashboard");
@@ -2762,6 +2897,8 @@ export function showDashboardView({ onLock, keepOverviewOpen = false } = {}) {
       </div>
     </details>
 
+    ${renderAutoExportAccordion(runtimeData)}
+
     <details class="accordion">
       <summary>
         <span>App zurücksetzen</span>
@@ -2783,7 +2920,7 @@ export function showDashboardView({ onLock, keepOverviewOpen = false } = {}) {
   document.getElementById("openNachbestellBtn").onclick = () => showNachbestellungView({ onLock });
   document.getElementById("openKilometerBtn").onclick = () => showKilometerView({ onLock });
   document.getElementById("openUnterschriftenblattBtn").onclick = () => {
-    window.open("./vorlagen/unterschriftenblatt.pdf", "_blank");
+    openPdfPreview("Unterschriftenblatt", "./vorlagen/unterschriftenblatt.pdf");
   };
   document.getElementById("openSupportBtn").onclick = () => {
     window.open("https://physiofast.wixsite.com/fast-support", "_blank");
@@ -2845,6 +2982,32 @@ export function showDashboardView({ onLock, keepOverviewOpen = false } = {}) {
       console.error(err);
       msg.className = "error";
       msg.textContent = `Backup-Export fehlgeschlagen: ${err.message || err}`;
+    }
+  };
+
+  document.getElementById("autoExportTestBtn").onclick = async () => {
+    const btn = document.getElementById("autoExportTestBtn");
+    const msg = document.getElementById("autoExportMsg");
+    btn.disabled = true;
+    msg.className = "muted";
+    msg.textContent = "Sende Test-Backup per E-Mail…";
+
+    try {
+      const result = await runAutoExportIfDue(getRuntimeData(), { force: true });
+      if (result.sent) {
+        msg.className = "success";
+        msg.textContent = "Test-Backup erfolgreich gesendet.";
+        showToast("Daten abgeschickt");
+      } else {
+        msg.className = "error";
+        msg.textContent = `Test-Backup fehlgeschlagen: ${result.error?.message || "Unbekannter Fehler (siehe Konsole)."}`;
+      }
+    } catch (err) {
+      console.error(err);
+      msg.className = "error";
+      msg.textContent = `Test-Backup fehlgeschlagen: ${err.message || err}`;
+    } finally {
+      btn.disabled = false;
     }
   };
 

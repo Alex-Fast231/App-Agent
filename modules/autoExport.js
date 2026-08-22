@@ -117,35 +117,71 @@ function blobToBase64DataUrl(blob) {
   });
 }
 
+// EmailJS erzwingt eine harte Obergrenze von 50 KB für alle dynamischen
+// Template-Variablen zusammen, AUSSER für Variablen, die im Template
+// explizit als "Variable Attachment" konfiguriert sind - dort gilt
+// stattdessen ein je nach EmailJS-Tarif höheres Limit (der kostenlose
+// Free-Tarif unterstützt laut EmailJS-Doku generell keine Attachments).
+// Da die Backup-ZIP mit den echten Praxisdaten wächst (anders als die
+// winzigen Testdatensätze in dieser Sandbox) und hier als Base64-String
+// übertragen wird, ist dieses Limit ein sehr wahrscheinlicher Grund dafür,
+// dass der Versand in der echten Nutzung scheitert, obwohl er strukturell
+// korrekt aussieht. Wir senden trotzdem immer (das Attachment-Feld könnte
+// im EmailJS-Template korrekt als "Variable Attachment" mit höherem Limit
+// hinterlegt sein), hängen aber bei Überschreitung einen klaren Hinweis an
+// die Fehlermeldung an, damit die tatsächliche Ursache beim nächsten
+// Fehlschlag sichtbar ist statt nur "Failed to fetch".
+const EMAILJS_VARIABLE_ATTACHMENT_SAFE_LIMIT_BYTES = 50 * 1024;
+
 // Sendet die exportierte Backup-Datei per EmailJS (client-seitiger, "public key"
 // basierter E-Mail-Versand ohne eigenes Backend - siehe emailjs.com). Das
 // EmailJS-Template muss folgende Variablen verwenden: to_email, subject,
 // message, therapist_name, filename, attachment (als "Variable Attachment").
 async function sendExportViaEmailJs({ therapistName, blob, filename }) {
+  console.log(`Auto-Export: baue Base64-Anhang aus ZIP (${blob.size} Bytes roh)…`);
   const attachmentDataUrl = await blobToBase64DataUrl(blob);
+  const attachmentBytes = attachmentDataUrl.length;
+  console.log(`Auto-Export: Base64-Anhang fertig (${attachmentBytes} Zeichen). Sende an EmailJS (Service ${EMAILJS_SERVICE_ID}, Template ${EMAILJS_TEMPLATE_ID}, Ziel ${AUTO_EXPORT_TARGET_EMAIL})…`);
 
-  const response = await fetch(EMAILJS_ENDPOINT, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      service_id: EMAILJS_SERVICE_ID,
-      template_id: EMAILJS_TEMPLATE_ID,
-      user_id: EMAILJS_PUBLIC_KEY,
-      template_params: {
-        to_email: AUTO_EXPORT_TARGET_EMAIL,
-        subject: `FaSt-Doku Viewer-Backup – ${therapistName || "Therapeut"}`,
-        message: `Automatisches tägliches Backup von ${therapistName || "Therapeut"} für den FaSt-Doku Viewer. Die ZIP-Datei ist mit einer PIN geschützt.`,
-        therapist_name: therapistName || "",
-        filename,
-        attachment: attachmentDataUrl
-      }
-    })
-  });
+  const oversizeHint = attachmentBytes > EMAILJS_VARIABLE_ATTACHMENT_SAFE_LIMIT_BYTES
+    ? ` [Hinweis: Anhang ist ${Math.round(attachmentBytes / 1024)} KB groß - EmailJS begrenzt Nicht-Attachment-Variablen auf 50 KB und unterstützt echte Attachments je nach Tarif nur eingeschränkt. Falls dieser Fehler wiederholt auftritt: im EmailJS-Dashboard prüfen, ob das Feld "attachment" im Template als "Variable Attachment" konfiguriert ist und ob der Tarif Attachments in dieser Größe erlaubt.]`
+    : "";
+
+  let response;
+  try {
+    response = await fetch(EMAILJS_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        service_id: EMAILJS_SERVICE_ID,
+        template_id: EMAILJS_TEMPLATE_ID,
+        user_id: EMAILJS_PUBLIC_KEY,
+        template_params: {
+          to_email: AUTO_EXPORT_TARGET_EMAIL,
+          subject: `FaSt-Doku Viewer-Backup – ${therapistName || "Therapeut"}`,
+          message: `Automatisches tägliches Backup von ${therapistName || "Therapeut"} für den FaSt-Doku Viewer. Die ZIP-Datei ist mit einer PIN geschützt.`,
+          therapist_name: therapistName || "",
+          filename,
+          attachment: attachmentDataUrl
+        }
+      })
+    });
+  } catch (networkErr) {
+    console.error("Auto-Export: Netzwerkfehler beim EmailJS-Request (fetch konnte keine Antwort empfangen):", networkErr);
+    throw new Error(
+      `EmailJS-Versand fehlgeschlagen: Netzwerkfehler (${networkErr?.message || networkErr}). ` +
+      `Das deutet meist auf ein CORS-/Origin-Problem hin - im EmailJS-Dashboard unter Account > Security prüfen, ` +
+      `ob die Domain dieser App unter "Allowed origins" eingetragen ist.${oversizeHint}`
+    );
+  }
 
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    throw new Error(`EmailJS-Versand fehlgeschlagen (${response.status}): ${text || response.statusText}`);
+    console.error(`Auto-Export: EmailJS antwortete mit Fehlerstatus ${response.status}:`, text || response.statusText);
+    throw new Error(`EmailJS-Versand fehlgeschlagen (${response.status}): ${text || response.statusText}${oversizeHint}`);
   }
+
+  console.log("Auto-Export: EmailJS hat den Versand mit Status", response.status, "bestätigt.");
 }
 
 function pushAutoExportHistory(status, message) {
@@ -175,13 +211,20 @@ function markAutoExportSent() {
 // Rückfrage an den Therapeuten (Vorgabe: "ohne Bestätigung"). Gibt bei
 // Erfolg { sent: true } zurück, damit die UI eine kurze stille Meldung
 // ("Export gesendet") anzeigen kann.
-export async function runAutoExportIfDue(runtimeData) {
-  if (!isAutoExportDue(runtimeData)) {
+export async function runAutoExportIfDue(runtimeData, { force = false } = {}) {
+  if (!force && !isAutoExportDue(runtimeData)) {
+    console.log("Auto-Export: heute bereits gesendet, kein erneuter Versand fällig.");
     return { sent: false, reason: "not_due" };
   }
 
+  console.log(force ? "Auto-Export: manueller Test-Versand gestartet…" : "Auto-Export: fällig, starte Versand…");
+
   try {
+    if (!runtimeData) throw new Error("Keine App-Daten im Speicher (runtimeData ist leer) - Export übersprungen.");
+
     const result = await buildViewerExportZip(runtimeData);
+    console.log(`Auto-Export: ZIP "${result.filename}" gebaut (${result.blob.size} Bytes).`);
+
     await sendExportViaEmailJs({
       therapistName: runtimeData.settings.therapistName,
       blob: result.blob,
@@ -191,6 +234,7 @@ export async function runAutoExportIfDue(runtimeData) {
     markAutoExportSent();
     pushAutoExportHistory("sent", `Viewer-Backup "${result.filename}" gesendet an ${AUTO_EXPORT_TARGET_EMAIL}.`);
     await queuePersistRuntimeData();
+    console.log("Auto-Export: erfolgreich abgeschlossen.");
     return { sent: true };
   } catch (err) {
     console.error("Automatischer Export fehlgeschlagen:", err);

@@ -1,8 +1,50 @@
 # FaSt App – Handoff Summary
-**Stand:** 2026-08-22 (Session-Ende, sechste Session: 8 vorgegebene Aufgaben komplett umgesetzt)
-**Branch:** `claude/fast-app-8-features-xep6yr` (in `/workspace/app-test`, lokal, **54 Commits, weiterhin nicht auf GitHub gepusht**)
+**Stand:** 2026-08-22 (Session-Ende, siebte Session: Unterschriftenblatt-PDF repariert, Auto-Export-Bug von Grund auf analysiert)
+**Branch:** `claude/fast-app-8-features-xep6yr` (in `/workspace/app-test`, lokal, **55 Commits, weiterhin nicht auf GitHub gepusht (403, siehe Abschnitt 3)**)
 
-Diese Datei ersetzt die vorherige Version vom 2026-08-20 (fünfte Session) vollständig. Die fünfte Session (Fax/PDF-Upload, tägliches Viewer-Backup, OCR-ROI-Rückbau) bleibt unten in Abschnitt 0b/0/-1 als historische Dokumentation stehen.
+Diese Datei ersetzt die vorherige Version vom 2026-08-22 (sechste Session) vollständig. Die sechste Session (8 vorgegebene Aufgaben) bleibt unten in Abschnitt 6 als historische Dokumentation stehen.
+
+---
+
+## 7. Siebte Session: Unterschriftenblatt-PDF + kritischer Auto-Export-Bug ("von Grund auf analysieren")
+
+Der Nutzer gab zwei Aufgaben vor, wobei Aufgabe 2 explizit als "der wichtigste Bug dieser Session" markiert wurde, mit der ausdrücklichen Vorgabe, ihn "von Grund auf" zu analysieren statt "oberflächlich zu patchen".
+
+**Aufgabe 1 – Unterschriftenblatt öffnete sich nicht als PDF/ließ sich nicht drucken.**
+
+*Ursache gefunden:* Der Button rief bisher rohes `window.open("./vorlagen/unterschriftenblatt.pdf", "_blank")` auf. Die App läuft laut `manifest.webmanifest` mit `"display": "standalone"` (installierte PWA). In diesem Modus fehlt jegliches Browser-Chrome (keine Adressleiste, kein Drucken-/Teilen-Symbol) - das PDF öffnete sich dadurch in der echten Nutzung entweder gar nicht sichtbar oder ohne jede Möglichkeit zum Drucken/Weiterleiten, obwohl derselbe Code in einem normalen Browser-Tab beim Testen unauffällig funktioniert hätte. Alle anderen druckbaren Dokumente der App (Therapiebericht, Nachbestell-Briefe) nutzten dagegen bereits ein selbst kontrolliertes Fenster mit eigenem Drucken-Button (`openHtmlDocument`/`window.print()`) - nur das Unterschriftenblatt (eine echte PDF-Datei, kein HTML-Dokument) ging diesen Weg nicht mit.
+
+*Fix:* Neue Funktion `openPdfPreview()` in `ui/views.js` - lädt das PDF per `fetch()` als Blob, zeigt es in einem selbst geöffneten Fenster in einem `<iframe>` an und bietet einen eigenen "Drucken"-Button, der `iframe.contentWindow.print()` aufruft. Das funktioniert unabhängig vom fehlenden Browser-Chrome im Standalone-Modus, weil der Druckdialog direkt per JavaScript ausgelöst wird statt sich auf Browser-UI zu verlassen. Zusätzlich zur Absicherung eine explizite Netlify-Redirect-Regel für `/vorlagen/*` ergänzt, die diesen Pfad unabhängig von der SPA-Catch-all-Regel garantiert als echte Datei ausliefert.
+
+**Aufgabe 2 (kritisch) – Automatischer Export per E-Mail kommt nicht an.**
+
+*Vollständige Durchleuchtung wie vom Nutzer verlangt:* Trigger-Timing (`core/boot.js`), EmailJS-Zugangsdaten, Verschlüsselung und den kompletten Ablauf in `modules/autoExport.js` Zeile für Zeile geprüft, inkl. Playwright-Tests mit abgefangenen echten EmailJS-Requests (Request-Struktur, Service/Template/Key, Empfänger, Anhang):
+- Trigger feuert nachweislich bei **jedem** Entsperren (Ersteinrichtung, normaler Login, Login nach Auto-Lock) - kein Timing-/Race-Problem zwischen `setRuntimeSession()` und dem Trigger-Aufruf gefunden (`setRuntimeSession` ist synchron und läuft vor dem `await`, der den Trigger auslöst).
+- Service-ID, Template-ID, Public Key und die Zieladresse `physio_fast@gmx.de` sind korrekt hinterlegt und werden korrekt übertragen (per Playwright-Request-Interception verifiziert).
+- Die ZIP-Verschlüsselung wirft keinen Fehler.
+- **Der eigentliche Kernbefund:** `autoExportHistory` (das Feld, in dem jeder Versand-Erfolg/-Fehlschlag inkl. Fehlermeldung protokolliert wird) wurde **nirgends in der UI angezeigt** - jeder Fehlschlag war bisher nur über die Browser-Entwicklerkonsole sichtbar, die ein Therapeut im Praxisalltag nie öffnet. Das erklärt, warum das Problem trotz strukturell korrektem Code unbemerkt blieb: die App hat den Fehler die ganze Zeit registriert, ihn aber niemandem gezeigt.
+- **Recherchiert (siehe Quellen):** EmailJS begrenzt alle dynamischen Template-Variablen zusammen auf **50 KB**, außer eine Variable ist im Template explizit als "Variable Attachment" konfiguriert - dafür gilt dann ein vom Tarif abhängiges Limit, wobei der kostenlose Free-Tarif laut EmailJS-Dokumentation generell **keine Attachments unterstützt**. Da die Backup-ZIP mit den echten Praxisdaten wächst (anders als die winzigen Testdatensätze in dieser Sandbox) und als Base64-String übertragen wird, ist das ein sehr wahrscheinlicher Kandidat dafür, dass der Versand in der echten Nutzung irgendwann scheitert, obwohl er mit kleinen Testdaten funktioniert. **Das lässt sich aus dieser Sandbox heraus nicht abschließend verifizieren**, da ausgehende Verbindungen zu `api.emailjs.com` hier block sind (bestätigte Einschränkung seit mehreren Sessions) - ein tatsächlicher EmailJS-Tarif-/Template-Check ist nur über das echte EmailJS-Dashboard möglich (siehe "Für den Nutzer zu prüfen" unten).
+
+*Fixes in `modules/autoExport.js`, `ui/views.js`, `core/boot.js`:*
+- Neuer Bereich **"Automatischer Viewer-Export"** im Dashboard (unterhalb von "Backup"): zeigt Status (zuletzt erfolgreich/fehlgeschlagen), Zeitstempel des letzten erfolgreichen Versands und die letzten 5 Verlaufseinträge mit Klartext-Fehlermeldung an - ab sofort ohne Entwicklerkonsole einsehbar.
+- Neuer Button **"Jetzt senden (Test)"**: löst über einen neuen `force`-Parameter in `runAutoExportIfDue()` sofort einen Testversand aus, unabhängig vom Tages-Intervall - direktes Feedback statt auf den nächsten Tag warten zu müssen.
+- Deutlich mehr Diagnose-`console.log`-Ausgaben bei jedem Schritt (ZIP-Größe in Bytes, Base64-Anhanggröße, EmailJS-Antwortstatus) - macht "Console-Logs prüfen" (Vorgabe des Nutzers) tatsächlich aussagekräftig.
+- Netzwerkfehler beim `fetch()` (z.B. durch CORS/Origin-Sperre) werden jetzt von HTTP-Fehlerantworten unterschieden und mit einem konkreten Hinweis versehen ("im EmailJS-Dashboard unter Account > Security prüfen, ob die Domain unter 'Allowed origins' eingetragen ist") statt nur die generische Meldung "Failed to fetch" zu zeigen.
+- Bei Überschreiten von 50 KB Anhanggröße wird der Fehlermeldung automatisch ein Hinweis auf das EmailJS-Größenlimit und die Tarif-/Template-Konfiguration angehängt.
+- Das Dashboard aktualisiert sich nach einem automatischen Versand jetzt live nach, falls der Therapeut zu diesem Zeitpunkt weiterhin dort ist (vorher blieb die beim Entsperren gerenderte Ansicht bis zum nächsten manuellen Navigieren veraltet, da der Versand asynchron im Hintergrund läuft).
+
+**Für den Nutzer zu prüfen (kann nicht aus der Sandbox heraus verifiziert werden):**
+1. Im EmailJS-Dashboard unter Account > Security: ist die tatsächliche Netlify-Domain der App unter "Allowed origins" eingetragen?
+2. Im EmailJS-Dashboard, Tarif-Übersicht: unterstützt der aktuelle Tarif Attachments in ausreichender Größe (Free-Tarif unterstützt laut EmailJS keine Attachments)?
+3. Im Template `template_ffghrgk`: ist das Feld `attachment` als "Variable Attachment" konfiguriert (nicht als normale Text-Variable)?
+4. Nach diesem Fix: im Dashboard unter "Automatischer Viewer-Export" den Button "Jetzt senden (Test)" nutzen und die daraufhin angezeigte Meldung prüfen/melden - liefert jetzt (falls es weiterhin fehlschlägt) erstmals eine konkrete, im EmailJS-Dashboard nachschlagbare Fehlerursache statt eines unsichtbaren Fehlschlags.
+
+**Getestet:** Neue Playwright-Tests `smoketest_unterschriftenblatt.mjs` (5/5), `smoketest_autoexport_aufgabe2.mjs` (9/9, inkl. Verifikation der automatisch beim allerersten App-Start ausgelösten E-Mail, des Verlaufs-Panels und des manuellen Test-Buttons mit simuliertem HTTP-422-Fehlschlag) und `smoketest_autoexport_networkfail.mjs` (1/1, verifiziert die neue CORS-Fehlermeldung bei simuliertem Netzwerkfehler). Volle bestehende Regressionssuite erneut durchlaufen: alle außer 5 bereits **vor** dieser Session fehlschlagenden, durch neuere Testdateien überholten Altdateien sind grün geblieben (per `git stash` gegen den unveränderten Stand verifiziert, dass diese 5 identisch bereits vorher fehlschlugen - keine Regression durch diese Session).
+
+Quellen (EmailJS-Limits, per Web-Suche recherchiert):
+- https://www.emailjs.com/docs/user-guide/dynamic-variables-templates/
+- https://github.com/orgs/emailjs-com/discussions/132
+- https://www.emailjs.com/docs/faq/can-i-use-emailjs-for-free/
 
 ---
 
@@ -152,9 +194,9 @@ Alle Testskripte liegen unter `/tmp/claude-0/-home-user/a9e9d6a0-2415-56f0-be21-
 
 ## 3. Was noch aussteht
 
-1. **GitHub-Push weiterhin blockiert (403).** Unverändert. Alle 54 Commits liegen lokal bereit. Diese Session wieder die **komplette App** (und separat den Viewer) als ZIP bereitgestellt, wie vom Nutzer als Standardvorgehen verlangt.
+1. **GitHub-Push weiterhin blockiert (403).** Unverändert. Alle 55 Commits liegen lokal bereit. Diese Session wieder die **komplette App** (und separat den Viewer) als ZIP bereitgestellt, wie vom Nutzer als Standardvorgehen verlangt.
 
-2. **Tägliches Viewer-Backup: erste echte Zustellung noch nicht vom Nutzer bestätigt.** Unverändert aus Session 5 - der EmailJS-Versand konnte in dieser Sandbox nur durch Abfangen des Requests verifiziert werden, nicht durch eine tatsächlich zugestellte E-Mail. **Nächster Schritt für den Nutzer:** prüfen, ob eine E-Mail mit ZIP-Anhang bei physio_fast@gmx.de ankommt, und ob sich die ZIP mit der PIN 1550 im Viewer öffnen lässt (jetzt zusätzlich hinter der neuen PIN-Sperre beim Öffnen des Viewers, siehe Abschnitt 6, Aufgabe 7).
+2. **Tägliches Viewer-Backup: erste echte Zustellung weiterhin nicht bestätigt - jetzt aber mit sichtbarer Fehlerdiagnose.** Der EmailJS-Versand konnte weiterhin nur durch Abfangen des Requests verifiziert werden, nicht durch eine tatsächlich zugestellte E-Mail (Sandbox blockt `api.emailjs.com`). Neu in Session 7: das Dashboard zeigt jetzt unter "Automatischer Viewer-Export" den Status und die letzten Fehlermeldungen an, plus einen "Jetzt senden (Test)"-Button. **Nächster Schritt für den Nutzer:** nach Einspielen dieser Session-Änderungen den Test-Button nutzen und die angezeigte Meldung prüfen/melden - siehe die vier konkreten EmailJS-Dashboard-Prüfpunkte in Abschnitt 7.
 
 3. **Vom Nutzer zu testen (aus den 8 Aufgaben dieser Session):**
    - Arzt-Autocomplete-Dropdown in der Praxis ausprobieren (Aufgabe 2).
@@ -178,12 +220,13 @@ Repo: `/workspace/app-test` (GitHub: `alex-fast231/app-test`, Branch `claude/fas
 |---|---|
 | `data/schema.js` | `APP_VERSION` (aktuell 3.9.26, automatischer Bump bei jedem Commit) |
 | `modules/ocr.js`, `vendor/tesseract/` | **Entfernt (Abschnitt 6, Aufgabe 1)** – komplette Fotoerkennung gestrichen, nur noch manuelle Eingabe |
-| `modules/autoExport.js` | Tägliches PIN-geschütztes (`1550`) Viewer-Backup an `physio_fast@gmx.de`; Fälligkeit jetzt kalendertag-basiert statt 24h-Timer (Abschnitt 6, Aufgabe 4) |
+| `modules/autoExport.js` | Tägliches PIN-geschütztes (`1550`) Viewer-Backup an `physio_fast@gmx.de`; Fälligkeit kalendertag-basiert; jetzt mit `force`-Parameter für manuellen Testversand, ausführlichen Diagnose-Logs und unterschiedenen Netzwerk-/HTTP-Fehlermeldungen (Abschnitt 7) |
 | `modules/backup.js` | Unverändert – manuelles "Backup exportieren/importieren" in den Einstellungen, weiterhin mit dem echten Praxispasswort |
 | `modules/assessment.js` | Neu: `THERAPIE_WEITERFUEHREN_OPTIONEN`, `THERAPIE_NUTZEN_OPTIONEN` (Abschnitt 6, Aufgabe 6) |
 | `modules/homes.js` | `createPatient` akzeptiert jetzt `anrede` (Abschnitt 6, Aufgabe 6) |
 | `data/normalization.js` | Neues Patientenfeld `anrede`; Arztbericht-Normalizer um `therapieWeiterfuehren`/`therapieNutzen` ergänzt und zwei Bugs behoben (`status_quo`/`keine_angabe` wurden bisher beim Speichern gelöscht) |
-| `ui/views.js` | Kamera/OCR entfernt; Arzt-Autocomplete-Dropdown; ICD-10-Feld-2-Formatierung; neue `showArztberichtView` (Schnellzugriff Arztbericht); Therapiebericht-Fixtext + Alle-Assessments + neue Fragen; Assessment-Zusammenfassung; App-Name "FaSt App" (Abschnitt 6, alle Aufgaben) |
+| `ui/views.js` | Kamera/OCR entfernt; Arzt-Autocomplete-Dropdown; ICD-10-Feld-2-Formatierung; neue `showArztberichtView` (Schnellzugriff Arztbericht); Therapiebericht-Fixtext + Alle-Assessments + neue Fragen; Assessment-Zusammenfassung; App-Name "FaSt App" (Abschnitt 6, alle Aufgaben); neue `openPdfPreview()` fürs Unterschriftenblatt + neuer "Automatischer Viewer-Export"-Bereich im Dashboard mit Verlauf/Test-Button (Abschnitt 7) |
+| `netlify.toml` | Neue explizite Redirect-Regel für `/vorlagen/*`, damit die SPA-Catch-all-Regel statische Dateien wie das Unterschriftenblatt-PDF nicht verschluckt (Abschnitt 7) |
 | `.githooks/pre-commit` + `scripts/bump-version.js` | Automatischer Versions-Bump. Einmalige Einrichtung pro Klon: `git config core.hooksPath .githooks` |
 | `viewer/index.html` | **Umgebaut (Abschnitt 6, Aufgabe 7)** – PIN-Sperre beim Öffnen, neue Tabs "Kilometer" und "Abgabelisten", "Patienten"-Tab in "Einrichtung / Patient" umbenannt |
 
@@ -194,7 +237,8 @@ Zweites Repo `verordnungschecker-entwicklung`: unverändert.
 ## 5. Empfohlener nächster Schritt für die neue Session
 
 1. GitHub-Push-Berechtigung klären, dann alle Commits pushen oder die bereitgestellte komplette-App-ZIP manuell einspielen lassen.
-2. **Vom Nutzer: die 8 Aufgaben aus Abschnitt 6 im echten Betrieb ausprobieren** und Rückmeldung geben, insbesondere Arzt-Autocomplete, Anrede-Feld/Therapiebericht-Fixtext und die neuen Viewer-Tabs (siehe Abschnitt 3, Punkt 3).
-3. **Vom Nutzer: bestätigen lassen, dass die tägliche Viewer-Backup-E-Mail bei physio_fast@gmx.de ankommt** und sich mit der PIN 1550 im (jetzt PIN-gesperrten) Viewer öffnen lässt.
-4. Bei Bedarf: Bearbeitungsmöglichkeit für das Anrede-Feld bei Bestandspatienten ergänzen (siehe Abschnitt 3, Punkt 5).
-5. Mit dem Nutzer die übrigen offenen Punkte aus Abschnitt 3 durchgehen.
+2. **Vom Nutzer: das Unterschriftenblatt in der echten (installierten) App öffnen und drucken/weiterschicken testen** (Abschnitt 7, Aufgabe 1).
+3. **Vom Nutzer: den neuen "Jetzt senden (Test)"-Button im Dashboard unter "Automatischer Viewer-Export" nutzen** und die angezeigte Meldung zurückmelden - falls weiterhin ein Fehler auftritt, jetzt mit konkretem Grund statt "kommt einfach nicht an". Die vier EmailJS-Dashboard-Prüfpunkte aus Abschnitt 7 selbst durchgehen (Allowed Origins, Tarif/Attachment-Unterstützung, Template-Konfiguration).
+4. **Vom Nutzer: die 8 Aufgaben aus Abschnitt 6 im echten Betrieb ausprobieren** und Rückmeldung geben, insbesondere Arzt-Autocomplete, Anrede-Feld/Therapiebericht-Fixtext und die neuen Viewer-Tabs (siehe Abschnitt 3, Punkt 3).
+5. Bei Bedarf: Bearbeitungsmöglichkeit für das Anrede-Feld bei Bestandspatienten ergänzen (siehe Abschnitt 3, Punkt 5).
+6. Mit dem Nutzer die übrigen offenen Punkte aus Abschnitt 3 durchgehen.
