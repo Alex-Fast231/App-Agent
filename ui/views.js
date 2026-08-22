@@ -91,7 +91,12 @@ import {
 import * as Assessment from "../modules/assessment.js";
 import * as AssessmentInfo from "../modules/assessmentInfo.js";
 import { exportBackup, importBackup, downloadBlob, validateBackupZip } from "../modules/backup.js";
-import { runAutoExportIfDue } from "../modules/autoExport.js";
+import {
+  buildBackupZip,
+  buildBackupReminderMailtoLink,
+  markBackupReminderHandled,
+  markBackupReminderPostponed
+} from "../modules/backupReminder.js";
 import { generateId, formatPatientName } from "../core/utils.js";
 import {
   normalizeDeDateInput,
@@ -1634,6 +1639,90 @@ export function showToast(message) {
   setTimeout(() => toast.remove(), 4000);
 }
 
+// Erinnerung an das Viewer-Backup als eigenständiges Overlay (als Kind von
+// document.body statt #app angehängt, damit es unabhängig von der gerade
+// angezeigten Ansicht sichtbar bleibt und von einem render()-Aufruf der
+// dahinterliegenden Ansicht nicht mit entfernt wird). Kein automatischer
+// Versand mehr (EmailJS wurde entfernt) - der Therapeut erledigt das
+// Backup per Klick selbst: Download und/oder E-Mail-Programm mit
+// vorbereitetem Anhangs-Hinweis öffnen. "Später erinnern" lässt die
+// Fälligkeit bewusst unverändert, damit die Erinnerung beim nächsten
+// Öffnen der App erneut erscheint.
+export function showBackupReminderModal({ onDone } = {}) {
+  const runtimeData = getRuntimeData();
+  if (!runtimeData) return;
+
+  document.getElementById("backupReminderOverlay")?.remove();
+
+  const overlay = document.createElement("div");
+  overlay.id = "backupReminderOverlay";
+  overlay.style.cssText = "position:fixed; inset:0; background:rgba(15,23,42,0.55); z-index:9998; display:flex; align-items:center; justify-content:center; padding:16px;";
+  overlay.innerHTML = `
+    <div class="card" style="max-width:420px; width:100%; margin:0;">
+      <h3>🔔 Backup-Erinnerung</h3>
+      <p class="muted">Für den separaten Offline-Viewer sollte regelmäßig ein Backup aller Praxisdaten erstellt werden. Die Datei ist mit der PIN <strong>1550</strong> geschützt.</p>
+      <div class="row" style="flex-direction:column; gap:10px; margin-top:16px;">
+        <button id="backupReminderDownloadBtn" style="margin-top:0;">Als Datei herunterladen</button>
+        <button id="backupReminderMailBtn" class="secondary" style="margin-top:0;">Per E-Mail senden (mailto)</button>
+        <button id="backupReminderLaterBtn" class="secondary" style="margin-top:0;">Später erinnern</button>
+      </div>
+      <div id="backupReminderMsg" class="muted" style="margin-top:12px;"></div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  function close() {
+    overlay.remove();
+    if (onDone) onDone();
+  }
+
+  document.getElementById("backupReminderLaterBtn").onclick = async () => {
+    await markBackupReminderPostponed();
+    close();
+  };
+
+  async function createBackupZip() {
+    const msg = document.getElementById("backupReminderMsg");
+    msg.className = "muted";
+    msg.textContent = "Backup wird erstellt…";
+    const result = await buildBackupZip(runtimeData);
+    downloadBlob(result.blob, result.filename);
+    return result;
+  }
+
+  document.getElementById("backupReminderDownloadBtn").onclick = async () => {
+    try {
+      const result = await createBackupZip();
+      await markBackupReminderHandled(`Backup "${result.filename}" heruntergeladen.`);
+      showToast("Backup heruntergeladen");
+      close();
+    } catch (err) {
+      console.error(err);
+      const msg = document.getElementById("backupReminderMsg");
+      msg.className = "error";
+      msg.textContent = `Backup fehlgeschlagen: ${err.message || err}`;
+    }
+  };
+
+  document.getElementById("backupReminderMailBtn").onclick = async () => {
+    try {
+      const result = await createBackupZip();
+      window.location.href = buildBackupReminderMailtoLink({
+        filename: result.filename,
+        therapistName: runtimeData.settings?.therapistName
+      });
+      await markBackupReminderHandled(`Backup "${result.filename}" heruntergeladen, E-Mail-Programm geöffnet (Anhang manuell hinzufügen).`);
+      showToast("Backup heruntergeladen - bitte in der E-Mail anhängen");
+      close();
+    } catch (err) {
+      console.error(err);
+      const msg = document.getElementById("backupReminderMsg");
+      msg.className = "error";
+      msg.textContent = `Backup fehlgeschlagen: ${err.message || err}`;
+    }
+  };
+}
+
 function openHtmlDocument(title, bodyHtml, { autoPrint = false } = {}) {
   const win = window.open("", "_blank", "width=900,height=700");
   if (!win) {
@@ -2708,39 +2797,35 @@ export function showSettingsView({ onLock }) {
   };
 }
 
-function formatAutoExportHistoryLine(entry) {
+function formatBackupReminderHistoryLine(entry) {
   const time = entry.createdAt ? new Date(entry.createdAt).toLocaleString("de-DE") : "";
-  const icon = entry.status === "sent" ? "✅" : "❌";
+  const icon = entry.status === "handled" ? "✅" : "⏭";
   return `<div class="row" style="padding:6px 0;">
     <div><strong>${icon} ${escapeHtml(time)}</strong></div>
     <div class="muted" style="font-size:13px; word-break:break-word;">${escapeHtml(entry.message || "")}</div>
   </div>`;
 }
 
-function renderAutoExportAccordion(runtimeData) {
+function renderBackupReminderAccordion(runtimeData) {
   const history = Array.isArray(runtimeData?.autoExportHistory) ? runtimeData.autoExportHistory : [];
-  const last = history[0];
   const lastAt = runtimeData?.ui?.lastAutoExportAt || "";
 
-  const statusSummary = last
-    ? (last.status === "sent" ? "Zuletzt erfolgreich" : "Zuletzt fehlgeschlagen")
-    : "Noch kein Versand";
+  const statusSummary = lastAt ? "Zuletzt erledigt" : "Noch nicht erledigt";
 
   return `
     <details class="accordion">
       <summary>
-        <span>Automatischer Viewer-Export</span>
+        <span>Backup-Erinnerung</span>
         <span class="muted">${escapeHtml(statusSummary)}</span>
       </summary>
       <div class="accordion-body">
-        <p class="muted">Tägliches automatisches PIN-geschütztes Backup per E-Mail für den separaten Viewer. Läuft automatisch beim Öffnen der App im Hintergrund, ohne Rückfrage.</p>
-        <p class="muted">${escapeHtml(lastAt ? `Letzter erfolgreicher Versand: ${new Date(lastAt).toLocaleString("de-DE")}` : "Noch kein erfolgreicher automatischer Versand.")}</p>
-        <button id="autoExportTestBtn" class="secondary" style="margin-top:0;">Jetzt senden (Test)</button>
-        <div id="autoExportMsg" class="muted" style="margin-top:12px;"></div>
+        <p class="muted">Regelmäßige Erinnerung an ein PIN-geschütztes Backup für den separaten Viewer. Erscheint beim Öffnen der App, sobald das Intervall abgelaufen ist - Download und/oder E-Mail-Versand erledigt der Therapeut dabei selbst per Klick.</p>
+        <p class="muted">${escapeHtml(lastAt ? `Zuletzt erledigt: ${new Date(lastAt).toLocaleString("de-DE")}` : "Noch nicht erledigt.")}</p>
+        <button id="backupReminderNowBtn" class="secondary" style="margin-top:0;">Jetzt Backup machen</button>
         ${history.length ? `
           <div style="margin-top:16px;">
             <div class="muted" style="font-weight:600; margin-bottom:4px;">Verlauf (letzte ${Math.min(history.length, 5)}):</div>
-            ${history.slice(0, 5).map(formatAutoExportHistoryLine).join("")}
+            ${history.slice(0, 5).map(formatBackupReminderHistoryLine).join("")}
           </div>
         ` : ""}
       </div>
@@ -2897,7 +2982,7 @@ export function showDashboardView({ onLock, keepOverviewOpen = false } = {}) {
       </div>
     </details>
 
-    ${renderAutoExportAccordion(runtimeData)}
+    ${renderBackupReminderAccordion(runtimeData)}
 
     <details class="accordion">
       <summary>
@@ -2985,30 +3070,8 @@ export function showDashboardView({ onLock, keepOverviewOpen = false } = {}) {
     }
   };
 
-  document.getElementById("autoExportTestBtn").onclick = async () => {
-    const btn = document.getElementById("autoExportTestBtn");
-    const msg = document.getElementById("autoExportMsg");
-    btn.disabled = true;
-    msg.className = "muted";
-    msg.textContent = "Sende Test-Backup per E-Mail…";
-
-    try {
-      const result = await runAutoExportIfDue(getRuntimeData(), { force: true });
-      if (result.sent) {
-        msg.className = "success";
-        msg.textContent = "Test-Backup erfolgreich gesendet.";
-        showToast("Daten abgeschickt");
-      } else {
-        msg.className = "error";
-        msg.textContent = `Test-Backup fehlgeschlagen: ${result.error?.message || "Unbekannter Fehler (siehe Konsole)."}`;
-      }
-    } catch (err) {
-      console.error(err);
-      msg.className = "error";
-      msg.textContent = `Test-Backup fehlgeschlagen: ${err.message || err}`;
-    } finally {
-      btn.disabled = false;
-    }
+  document.getElementById("backupReminderNowBtn").onclick = () => {
+    showBackupReminderModal({ onDone: () => showDashboardView({ onLock, keepOverviewOpen: true }) });
   };
 
   document.getElementById("importBackupBtn").onclick = () => {

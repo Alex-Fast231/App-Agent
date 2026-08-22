@@ -1,16 +1,16 @@
 import { openDatabase } from "../storage/indexeddb.js";
 import { hasSecuritySetup, loadCryptoMeta, loadSecurityState } from "../storage/secure-store.js";
-import { setCryptoMeta, setSecurityState, getRuntimeData, getCurrentView } from "./app-core.js";
+import { setCryptoMeta, setSecurityState, getRuntimeData } from "./app-core.js";
 import { createAutoLockController } from "../security/lock.js";
 import { APP_VERSION } from "../data/schema.js";
-import { runAutoExportIfDue } from "../modules/autoExport.js";
+import { isBackupReminderDue } from "../modules/backupReminder.js";
 import {
   showSetupView,
   showLoginView,
   showDashboardView,
   performLock,
   resumeCurrentView,
-  showToast
+  showBackupReminderModal
 } from "../ui/views.js";
 
 let autoLockController = null;
@@ -94,37 +94,34 @@ function ensureAutoLock() {
 function handleUnlocked() {
   ensureAutoLock();
   resumeCurrentView({ onLock: lockApp });
-  triggerAutoExportIfDue();
+  maybeShowBackupReminder();
 }
 
-// Läuft still im Hintergrund, ohne die UI zu blockieren oder den
-// Therapeuten um Bestätigung zu bitten (Vorgabe Funktion 8). Der kurze
-// Hinweis "Daten abgeschickt" ist bewusst nur für den aktuellen Testbetrieb
-// gedacht (Vorgabe des Nutzers) und kann später wieder entfernt werden,
-// sobald der tägliche Versand zuverlässig bestätigt ist.
-function triggerAutoExportIfDue() {
+// Zeigt beim Entsperren eine Erinnerung an das Viewer-Backup, sobald das
+// konfigurierte Intervall abgelaufen ist (Vorgabe des Nutzers: aktuell im
+// Testbetrieb täglich, künftig alle 4 Wochen - siehe
+// modules/backupReminder.js). Kein automatischer Versand mehr (EmailJS
+// wurde komplett entfernt): der Therapeut erledigt das Backup per Klick
+// selbst (Download und/oder E-Mail-Programm mit vorbereitetem
+// Anhangs-Hinweis öffnen), dadurch gibt es keinen unsichtbaren
+// Fehlschlagpfad mehr.
+function maybeShowBackupReminder() {
   const runtimeData = getRuntimeData();
   if (!runtimeData) {
-    console.warn("Auto-Export: übersprungen, da beim Entsperren keine App-Daten im Speicher waren (runtimeData ist leer).");
+    console.warn("Backup-Erinnerung: übersprungen, da beim Entsperren keine App-Daten im Speicher waren (runtimeData ist leer).");
     return;
   }
 
-  runAutoExportIfDue(runtimeData)
-    .then((result) => {
-      if (result?.sent) {
-        showToast("Daten abgeschickt");
-      }
-      // Falls der Therapeut in der Zwischenzeit weiterhin auf dem
-      // Dashboard ist, dessen Verlaufs-Anzeige mit dem frischen Ergebnis
-      // aktualisieren (die Ansicht wurde beim Entsperren gerendert, bevor
-      // dieser asynchrone Versand abgeschlossen war). Andere Ansichten
-      // (z.B. ein gerade bearbeitetes Formular) bewusst nicht neu rendern,
-      // um keine ungespeicherten Eingaben zu verwerfen.
-      if (getCurrentView() === "dashboard") {
-        resumeCurrentView({ onLock: lockApp });
-      }
-    })
-    .catch((err) => console.error("Automatischer Export fehlgeschlagen:", err));
+  if (!isBackupReminderDue(runtimeData)) return;
+
+  // Das Modal blockiert währenddessen jede Interaktion mit der
+  // dahinterliegenden Ansicht (volle Bildschirmüberdeckung), daher kann
+  // sich dort in der Zwischenzeit nichts geändert haben - ein erneutes
+  // resumeCurrentView() nach dem Schließen ist somit gefahrlos möglich und
+  // sorgt dafür, dass z.B. die "Backup-Erinnerung"-Historie im Dashboard
+  // sofort den gerade erledigten/verschobenen Stand zeigt, statt erst nach
+  // der nächsten Navigation.
+  showBackupReminderModal({ onDone: () => resumeCurrentView({ onLock: lockApp }) });
 }
 
 async function bootstrapApp() {

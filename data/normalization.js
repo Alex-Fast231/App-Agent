@@ -594,7 +594,7 @@ function normalizeAutoExportHistory(items) {
     return {
       id: ensureString(source.id) || generateId("autoexport"),
       createdAt: ensureIsoString(source.createdAt, new Date().toISOString()),
-      status: ["sent", "failed"].includes(source.status) ? source.status : "failed",
+      status: ["handled", "postponed"].includes(source.status) ? source.status : "postponed",
       message: ensureString(source.message)
     };
   }).slice(0, 20);

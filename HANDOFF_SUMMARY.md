@@ -1,8 +1,10 @@
 # FaSt App – Handoff Summary
-**Stand:** 2026-08-22 (Session-Ende, siebte Session: Unterschriftenblatt-PDF repariert, Auto-Export-Bug von Grund auf analysiert)
-**Branch:** `claude/fast-app-8-features-xep6yr` (in `/workspace/app-test`, lokal, **55 Commits, weiterhin nicht auf GitHub gepusht (403, siehe Abschnitt 3)**)
+**Stand:** 2026-08-22 (Session-Ende, siebte Session inkl. Nachtrag: EmailJS komplett entfernt, Backup-Erinnerung mit mailto/Download eingeführt)
+**Branch:** `claude/fast-app-8-features-xep6yr` (in `/workspace/app-test`, lokal, **56 Commits, weiterhin nicht auf GitHub gepusht (403, siehe Abschnitt 3)**)
 
 Diese Datei ersetzt die vorherige Version vom 2026-08-22 (sechste Session) vollständig. Die sechste Session (8 vorgegebene Aufgaben) bleibt unten in Abschnitt 6 als historische Dokumentation stehen.
+
+**WICHTIG für den schnellen Einstieg:** Abschnitt 7 unten (Aufgabe 2, "Automatischer Export per E-Mail") beschreibt eine EmailJS-Diagnose, die im direkt darauffolgenden Nachtrag (Abschnitt 7b) wieder hinfällig wurde - der Nutzer hat sich nach Sichtung entschieden, EmailJS komplett zu entfernen statt es zu reparieren. **EmailJS wird seitdem an keiner Stelle der App mehr verwendet.** Abschnitt 7 bleibt nur als historische Dokumentation der Analyse stehen; für den aktuellen Stand direkt zu Abschnitt 7b springen.
 
 ---
 
@@ -45,6 +47,30 @@ Quellen (EmailJS-Limits, per Web-Suche recherchiert):
 - https://www.emailjs.com/docs/user-guide/dynamic-variables-templates/
 - https://github.com/orgs/emailjs-com/discussions/132
 - https://www.emailjs.com/docs/faq/can-i-use-emailjs-for-free/
+
+---
+
+## 7b. Nachtrag (gleiche Sitzung): EmailJS komplett entfernt, Backup-Erinnerung statt automatischem Versand
+
+Direkt im Anschluss an Abschnitt 7 gab der Nutzer die Rückmeldung: EmailJS soll komplett aus der App raus. Stattdessen soll das Backup über eine **Erinnerung** funktionieren, die beim Öffnen der App erscheint und dem Therapeuten die Wahl lässt zwischen **mailto** (E-Mail-Programm öffnen) oder **Download** der Backup-Datei - kein automatischer Hintergrundversand mehr. Die Erinnerung soll künftig alle 4 Wochen erscheinen, aktuell im Testbetrieb weiterhin täglich (identisch zum bisherigen Intervall-Mechanismus).
+
+**Entfernt:** `modules/autoExport.js` komplett gelöscht - keine EmailJS-Zugangsdaten, kein `fetch()` an `api.emailjs.com` mehr irgendwo in der App (per Playwright-Test verifiziert: 0 Requests an emailjs.com über den gesamten Setup+Backup-Ablauf).
+
+**Neu: `modules/backupReminder.js`** (Nachfolger von `autoExport.js`, gleiche Kalendertag-Fälligkeitslogik wie zuvor `isAutoExportDue()`, jetzt `isBackupReminderDue()`):
+- `BACKUP_REMINDER_INTERVAL_DAYS = 1` - wie von Session 6/7 bereits etabliert, aktuell zum Testen täglich, Kommentar im Code weist wie zuvor darauf hin, hier auf `28` zu ändern, sobald der Testbetrieb abgeschlossen ist.
+- `buildBackupZip()` - unveränderte ZIP-Erstellung (PIN 1550, appData.json), nur umbenannt.
+- `buildBackupReminderMailtoLink()` - da `mailto:`-Links aus Sicherheitsgründen keine Dateianhänge tragen können, wird die Backup-ZIP beim Klick auf "Per E-Mail senden" zuerst normal heruntergeladen, danach das E-Mail-Programm mit vorausgefülltem Betreff/Text geöffnet (Zieladresse weiterhin `physio_fast@gmx.de`), der Text weist explizit darauf hin, die soeben heruntergeladene Datei manuell anzuhängen.
+- `markBackupReminderHandled()` / `markBackupReminderPostponed()` - Fälligkeitszeitpunkt wird nur bei tatsächlicher Erledigung (Download oder mailto) zurückgesetzt; bei "Später erinnern" bewusst **nicht**, damit die Erinnerung beim nächsten Öffnen der App erneut erscheint statt für ein ganzes Intervall zu verschwinden.
+
+**Neu in `ui/views.js`:** `showBackupReminderModal()` - blockierendes Overlay (volle Bildschirmüberdeckung, als Kind von `document.body` statt `#app` angehängt, damit es unabhängig von der gerade angezeigten Ansicht bestehen bleibt) mit drei Optionen: "Als Datei herunterladen", "Per E-Mail senden (mailto)", "Später erinnern". Dashboard-Bereich von "Automatischer Viewer-Export" zu **"Backup-Erinnerung"** umbenannt: zeigt Status, Zeitpunkt der letzten Erledigung und die letzten 5 Verlaufseinträge (✅ erledigt / ⏭ verschoben), plus Button "Jetzt Backup machen" zum Öffnen der Erinnerung auf Zuruf.
+
+**In `core/boot.js`:** `triggerAutoExportIfDue()` durch `maybeShowBackupReminder()` ersetzt - prüft Fälligkeit beim Entsperren (Ersteinrichtung, normaler Login, Login nach Auto-Lock) und öffnet bei Bedarf das Modal. Da das Modal jede Interaktion mit der dahinterliegenden Ansicht blockiert (volle Überdeckung), ist ein erneutes `resumeCurrentView()` nach dem Schließen gefahrlos möglich und sorgt dafür, dass z.B. die Backup-Erinnerung-Historie im Dashboard sofort den aktuellen Stand zeigt.
+
+**Datenmodell unverändert gelassen** (bewusste Entscheidung, keine Migration nötig): Die Felder `autoExportHistory` und `ui.lastAutoExportAt` in `data/schema.js`/`data/normalization.js` behalten ihre bisherigen Namen, obwohl sich ihre Bedeutung geändert hat (jetzt "Backup-Erinnerung erledigt/verschoben" statt "E-Mail gesendet/fehlgeschlagen") - ein Umbenennen hätte bereits exportierte/importierte Backups aus Vorversionen inkompatibel gemacht. Die Status-Whitelist in `normalizeAutoExportHistory()` wurde von `["sent", "failed"]` auf `["handled", "postponed"]` angepasst.
+
+**Getestet:** Zwei neue Playwright-Tests: `smoketest_backup_reminder.mjs` (10/10 - Erinnerung erscheint automatisch beim ersten Start, alle drei Buttons vorhanden, "Später erinnern" schließt ohne Aktion, "Jetzt Backup machen" im Dashboard öffnet erneut, Download-Button löst echten Datei-Download aus, 0 Requests an emailjs.com, Erinnerung erscheint am selben Tag nach Erledigung nicht erneut, Verlauf zeigt korrekten Eintrag) und `smoketest_backup_reminder_mailto.mjs` (4/4 - "Per E-Mail senden" lädt die ZIP zusätzlich herunter, Hinweistext zum manuellen Anhängen, keine Page-Errors durch den mailto-Navigationsversuch, Verlauf dokumentiert den Weg korrekt). Volle bestehende Regressionssuite erneut durchlaufen (18 betroffene Testdateien mussten dafür um einen Zeilen-Dismiss des neuen Modals nach der Ersteinrichtung ergänzt werden, da die Erinnerung jetzt bei jedem ersten Öffnen blockierend erscheint) - alle grün, keine Regression. Die alten EmailJS-spezifischen Tests (`smoketest_autoexport_aufgabe2.mjs`, `smoketest_autoexport_networkfail.mjs`, `smoketest_viewer_autoexport.mjs`, `smoketest_autoexport_task2.mjs`) sind durch die Entfernung hinfällig geworden und wurden nicht weiter gepflegt.
+
+**Wichtiger Verhaltenshinweis:** Da die Erinnerung als blockierendes Modal **bei jedem Öffnen der App** erscheint, sobald das Intervall abgelaufen ist (aktuell täglich zum Testen), sieht der Therapeut sie potenziell mehrmals am Tag, falls er die App mehrfach öffnet, ohne "Später erinnern" wegzuklicken oder ein Backup zu erledigen - das ist beabsichtigt (Vorgabe: "soll... beim Öffnen direkt erscheinen"), aber dem Nutzer explizit mitzuteilen, falls das im Testbetrieb als störend empfunden wird.
 
 ---
 
@@ -194,9 +220,9 @@ Alle Testskripte liegen unter `/tmp/claude-0/-home-user/a9e9d6a0-2415-56f0-be21-
 
 ## 3. Was noch aussteht
 
-1. **GitHub-Push weiterhin blockiert (403).** Unverändert. Alle 55 Commits liegen lokal bereit. Diese Session wieder die **komplette App** (und separat den Viewer) als ZIP bereitgestellt, wie vom Nutzer als Standardvorgehen verlangt.
+1. **GitHub-Push weiterhin blockiert (403).** Unverändert. Alle 56 Commits liegen lokal bereit. Diese Session wieder die **komplette App** (und separat den Viewer) als ZIP bereitgestellt, wie vom Nutzer als Standardvorgehen verlangt.
 
-2. **Tägliches Viewer-Backup: erste echte Zustellung weiterhin nicht bestätigt - jetzt aber mit sichtbarer Fehlerdiagnose.** Der EmailJS-Versand konnte weiterhin nur durch Abfangen des Requests verifiziert werden, nicht durch eine tatsächlich zugestellte E-Mail (Sandbox blockt `api.emailjs.com`). Neu in Session 7: das Dashboard zeigt jetzt unter "Automatischer Viewer-Export" den Status und die letzten Fehlermeldungen an, plus einen "Jetzt senden (Test)"-Button. **Nächster Schritt für den Nutzer:** nach Einspielen dieser Session-Änderungen den Test-Button nutzen und die angezeigte Meldung prüfen/melden - siehe die vier konkreten EmailJS-Dashboard-Prüfpunkte in Abschnitt 7.
+2. **EmailJS entfernt, Backup-Erinnerung noch nicht in echter Nutzung bestätigt.** Siehe Abschnitt 7b - der automatische E-Mail-Versand wurde komplett durch eine Erinnerung mit mailto/Download ersetzt, dadurch entfällt das gesamte EmailJS-Zustellproblem grundsätzlich (kein Server-Request mehr, der scheitern könnte). **Nächster Schritt für den Nutzer:** die Erinnerung beim nächsten echten App-Öffnen ausprobieren (Download-Button UND "Per E-Mail senden" testen) und zurückmelden, ob beides wie erwartet funktioniert.
 
 3. **Vom Nutzer zu testen (aus den 8 Aufgaben dieser Session):**
    - Arzt-Autocomplete-Dropdown in der Praxis ausprobieren (Aufgabe 2).
@@ -205,7 +231,7 @@ Alle Testskripte liegen unter `/tmp/claude-0/-home-user/a9e9d6a0-2415-56f0-be21-
 
 4. **Offene Punkte aus früheren Sessions** (unverändert, siehe deren Handoff-Versionen im Git-Verlauf):
    - 3 offene Code-Lücken (`updateHomeAddress`, `deleteDiagnoseZuordnung`, `createRezeptTimeEntry` – Funktionen ohne UI-Anbindung).
-   - DSGVO-Löschkonzept/Aufbewahrungsfristen und AVV-Prüfung mit EmailJS weiterhin organisatorisch/rechtlich zu klären. Das tägliche Viewer-Backup verschickt weiterhin unverschlüsselte Gesundheitsdaten (nur per 4-stelliger ZIP-PIN geschützt) per E-Mail – eine bewusste Nutzerentscheidung, aber ggf. bei der DSGVO-Prüfung zu berücksichtigen.
+   - DSGVO-Löschkonzept/Aufbewahrungsfristen weiterhin organisatorisch/rechtlich zu klären (die AVV-Prüfung mit EmailJS ist seit Abschnitt 7b hinfällig, da EmailJS komplett entfernt wurde). Die Backup-ZIP enthält weiterhin unverschlüsselte Gesundheitsdaten (nur per 4-stelliger ZIP-PIN geschützt) - eine bewusste Nutzerentscheidung, aber ggf. bei der DSGVO-Prüfung zu berücksichtigen.
    - "FaSt-Button"-Thema aus einer früheren Aufgabe wurde auf Nutzerwunsch übersprungen.
 
 5. **Neu diese Session: Kein Bearbeiten-Weg für das Anrede-Feld bei bereits bestehenden Patienten.** Das Feld wird nur beim Neuanlegen abgefragt (`showCreatePatientRezeptView`). Falls der Nutzer die Anrede nachträglich für Bestandspatienten setzen möchte, fehlt dafür aktuell eine UI - ggf. in einer Folge-Session ergänzen (z.B. im ohnehin vorhandenen "Stammdaten"-Bearbeitungsbereich der Home-Detail-Ansicht).
@@ -220,12 +246,13 @@ Repo: `/workspace/app-test` (GitHub: `alex-fast231/app-test`, Branch `claude/fas
 |---|---|
 | `data/schema.js` | `APP_VERSION` (aktuell 3.9.26, automatischer Bump bei jedem Commit) |
 | `modules/ocr.js`, `vendor/tesseract/` | **Entfernt (Abschnitt 6, Aufgabe 1)** – komplette Fotoerkennung gestrichen, nur noch manuelle Eingabe |
-| `modules/autoExport.js` | Tägliches PIN-geschütztes (`1550`) Viewer-Backup an `physio_fast@gmx.de`; Fälligkeit kalendertag-basiert; jetzt mit `force`-Parameter für manuellen Testversand, ausführlichen Diagnose-Logs und unterschiedenen Netzwerk-/HTTP-Fehlermeldungen (Abschnitt 7) |
+| `modules/autoExport.js` | **Entfernt (Abschnitt 7b)** – EmailJS komplett gestrichen |
+| `modules/backupReminder.js` | **Neu (Abschnitt 7b)** – ersetzt `autoExport.js`: baut die PIN-geschützte (`1550`) Backup-ZIP, Kalendertag-Fälligkeitslogik (`isBackupReminderDue`, aktuell täglich, künftig alle 4 Wochen), mailto-Link-Baustein für `physio_fast@gmx.de`. Kein Netzwerk-Request mehr - Download/mailto wird vom Therapeuten selbst ausgelöst |
 | `modules/backup.js` | Unverändert – manuelles "Backup exportieren/importieren" in den Einstellungen, weiterhin mit dem echten Praxispasswort |
 | `modules/assessment.js` | Neu: `THERAPIE_WEITERFUEHREN_OPTIONEN`, `THERAPIE_NUTZEN_OPTIONEN` (Abschnitt 6, Aufgabe 6) |
 | `modules/homes.js` | `createPatient` akzeptiert jetzt `anrede` (Abschnitt 6, Aufgabe 6) |
 | `data/normalization.js` | Neues Patientenfeld `anrede`; Arztbericht-Normalizer um `therapieWeiterfuehren`/`therapieNutzen` ergänzt und zwei Bugs behoben (`status_quo`/`keine_angabe` wurden bisher beim Speichern gelöscht) |
-| `ui/views.js` | Kamera/OCR entfernt; Arzt-Autocomplete-Dropdown; ICD-10-Feld-2-Formatierung; neue `showArztberichtView` (Schnellzugriff Arztbericht); Therapiebericht-Fixtext + Alle-Assessments + neue Fragen; Assessment-Zusammenfassung; App-Name "FaSt App" (Abschnitt 6, alle Aufgaben); neue `openPdfPreview()` fürs Unterschriftenblatt + neuer "Automatischer Viewer-Export"-Bereich im Dashboard mit Verlauf/Test-Button (Abschnitt 7) |
+| `ui/views.js` | Kamera/OCR entfernt; Arzt-Autocomplete-Dropdown; ICD-10-Feld-2-Formatierung; neue `showArztberichtView` (Schnellzugriff Arztbericht); Therapiebericht-Fixtext + Alle-Assessments + neue Fragen; Assessment-Zusammenfassung; App-Name "FaSt App" (Abschnitt 6, alle Aufgaben); neue `openPdfPreview()` fürs Unterschriftenblatt (Abschnitt 7); neue `showBackupReminderModal()` (blockierendes Erinnerungs-Overlay) + "Backup-Erinnerung"-Bereich im Dashboard (Abschnitt 7b) |
 | `netlify.toml` | Neue explizite Redirect-Regel für `/vorlagen/*`, damit die SPA-Catch-all-Regel statische Dateien wie das Unterschriftenblatt-PDF nicht verschluckt (Abschnitt 7) |
 | `.githooks/pre-commit` + `scripts/bump-version.js` | Automatischer Versions-Bump. Einmalige Einrichtung pro Klon: `git config core.hooksPath .githooks` |
 | `viewer/index.html` | **Umgebaut (Abschnitt 6, Aufgabe 7)** – PIN-Sperre beim Öffnen, neue Tabs "Kilometer" und "Abgabelisten", "Patienten"-Tab in "Einrichtung / Patient" umbenannt |
@@ -238,7 +265,7 @@ Zweites Repo `verordnungschecker-entwicklung`: unverändert.
 
 1. GitHub-Push-Berechtigung klären, dann alle Commits pushen oder die bereitgestellte komplette-App-ZIP manuell einspielen lassen.
 2. **Vom Nutzer: das Unterschriftenblatt in der echten (installierten) App öffnen und drucken/weiterschicken testen** (Abschnitt 7, Aufgabe 1).
-3. **Vom Nutzer: den neuen "Jetzt senden (Test)"-Button im Dashboard unter "Automatischer Viewer-Export" nutzen** und die angezeigte Meldung zurückmelden - falls weiterhin ein Fehler auftritt, jetzt mit konkretem Grund statt "kommt einfach nicht an". Die vier EmailJS-Dashboard-Prüfpunkte aus Abschnitt 7 selbst durchgehen (Allowed Origins, Tarif/Attachment-Unterstützung, Template-Konfiguration).
+3. **Vom Nutzer: die neue Backup-Erinnerung in echter Nutzung ausprobieren** (Abschnitt 7b) - erscheint beim nächsten App-Öffnen automatisch (aktuell täglich), beide Wege testen ("Als Datei herunterladen" und "Per E-Mail senden"), sowie prüfen, ob das tägliche Erscheinen im Alltag als störend empfunden wird (dann ggf. vorzeitig auf ein längeres Intervall umstellen, statt bis zum Ende des Testbetriebs zu warten).
 4. **Vom Nutzer: die 8 Aufgaben aus Abschnitt 6 im echten Betrieb ausprobieren** und Rückmeldung geben, insbesondere Arzt-Autocomplete, Anrede-Feld/Therapiebericht-Fixtext und die neuen Viewer-Tabs (siehe Abschnitt 3, Punkt 3).
 5. Bei Bedarf: Bearbeitungsmöglichkeit für das Anrede-Feld bei Bestandspatienten ergänzen (siehe Abschnitt 3, Punkt 5).
 6. Mit dem Nutzer die übrigen offenen Punkte aus Abschnitt 3 durchgehen.
