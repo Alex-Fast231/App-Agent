@@ -1,6 +1,6 @@
 FaSt App – Vollständiger App-Stand für ein GitHub-Repo
 ================================================================
-Stand: 2026-08-22, siebte Session inkl. drei Nachträgen, Version 3.9.32
+Stand: 2026-08-22, siebte Session inkl. vier Nachträgen, Version 3.9.33
 
 Diese ZIP enthält den KOMPLETTEN, lauffähigen und getesteten Stand der
 App (alle Dateien außer dem separaten Viewer), direkt aus der
@@ -11,15 +11,13 @@ Der Viewer wird wie gewünscht separat als eigene Datei bereitgestellt
 
 WICHTIGSTE Änderung in dieser Version
 ----------------------------------------------------------------------
-Unterschriftenblatt: Nach zwei fehlgeschlagenen Versuchen, das echte
-PDF zuverlässig zu öffnen (Android hat es immer wieder an eine externe
-App wie Google Drive weitergereicht, ganz ohne Druckmöglichkeit),
-wurde die Funktion komplett umgestellt. Sie funktioniert jetzt exakt
-wie die Abgabeliste: ein eigenes Fenster mit reinem HTML-Inhalt (Tabelle
-"Empfangsbestätigung durch den Versicherten" + Feld "Abrechnungsdaten
-des Heilmittelerbringers", nachgebaut aus dem Original-PDF) und einem
-eigenen "Drucken"-Button. Kein PDF, kein Blob mehr - Android hat damit
-keine Möglichkeit mehr, die Anzeige an eine andere App weiterzureichen.
+Unterschriftenblatt: Nach mehreren Fehlversuchen (unterschiedliche
+Wege, das PDF anzuzeigen/zu drucken, die auf Android nicht
+funktionierten oder inhaltlich nicht ausreichten) wurde die Funktion
+auf Ihren Wunsch wieder auf den URSPRÜNGLICHEN, einfachsten Code
+zurückgesetzt: Klick auf "Unterschriften" öffnet die echte PDF-Datei
+direkt in einem neuen Tab/Fenster (window.open), genau wie in der
+allerersten Version der App.
 
 Weitere Änderungen aus dieser Session
 ----------------------------------------------------------------------
@@ -67,7 +65,7 @@ Datei "modules/autoExport.js" existiert in dieser Version nicht mehr
 (durch "modules/backupReminder.js" ersetzt) - falls sie in Ihrem
 bestehenden Repo noch vorhanden ist, bitte manuell löschen.
 
-Details siehe HANDOFF_SUMMARY.md, Abschnitt "7d" (aktuellster Stand).
+Details siehe HANDOFF_SUMMARY.md, Abschnitt "7e" (aktuellster Stand).
 
 Bei Fragen oder falls nach dem Hochladen etwas nicht funktioniert:
 bitte mit genauer Fehlerbeschreibung/Screenshot zurückmelden.

@@ -1,10 +1,12 @@
 # FaSt App – Handoff Summary
-**Stand:** 2026-08-22 (Session-Ende, siebte Session inkl. drei Nachträgen: EmailJS entfernt, Unterschriftenblatt zweimal nachgebessert - jetzt als HTML wie die Abgabeliste)
-**Branch:** `claude/fast-app-8-features-xep6yr` (in `/workspace/app-test`, lokal, **58 Commits, weiterhin nicht auf GitHub gepusht (403, siehe Abschnitt 3)**)
+**Stand:** 2026-08-22 (Session-Ende, siebte Session inkl. vier Nachträgen: EmailJS entfernt, Unterschriftenblatt nach drei Fehlversuchen auf Nutzerwunsch wieder auf den ursprünglichen Mechanismus zurückgesetzt)
+**Branch:** `claude/fast-app-8-features-xep6yr` (in `/workspace/app-test`, lokal, **59 Commits, weiterhin nicht auf GitHub gepusht (403, siehe Abschnitt 3)**)
 
 Diese Datei ersetzt die vorherige Version vom 2026-08-22 (sechste Session) vollständig. Die sechste Session (8 vorgegebene Aufgaben) bleibt unten in Abschnitt 6 als historische Dokumentation stehen.
 
-**WICHTIG für den schnellen Einstieg:** Abschnitt 7 unten (Aufgabe 2, "Automatischer Export per E-Mail") beschreibt eine EmailJS-Diagnose, die im direkt darauffolgenden Nachtrag (Abschnitt 7b) wieder hinfällig wurde - der Nutzer hat sich nach Sichtung entschieden, EmailJS komplett zu entfernen statt es zu reparieren. **EmailJS wird seitdem an keiner Stelle der App mehr verwendet.** Abschnitt 7 bleibt nur als historische Dokumentation der Analyse stehen; für den aktuellen Stand direkt zu Abschnitt 7b springen.
+**WICHTIG für den schnellen Einstieg:**
+- Abschnitt 7 unten (Aufgabe 2, "Automatischer Export per E-Mail") beschreibt eine EmailJS-Diagnose, die im direkt darauffolgenden Nachtrag (Abschnitt 7b) wieder hinfällig wurde - der Nutzer hat sich nach Sichtung entschieden, EmailJS komplett zu entfernen statt es zu reparieren. **EmailJS wird seitdem an keiner Stelle der App mehr verwendet.**
+- **Unterschriftenblatt: bitte direkt zu Abschnitt 7e springen.** Die Abschnitte 7, 7c und 7d beschreiben drei nacheinander gescheiterte Versuche (iframe+Blob, Top-Level-Blob-Navigation, HTML-Nachbau) - der Nutzer hat den Verlauf am Ende auf den **ursprünglichen** Mechanismus zurückgesetzt (`window.open()` direkt auf die echte PDF-Datei), da dieser laut Nutzer tatsächlich funktioniert. Alle Zwischenversuche bleiben nur als Dokumentation stehen, warum sie nicht weiterverfolgt wurden.
 
 ---
 
@@ -102,6 +104,24 @@ Der Nutzer meldete nach dem Fix aus Abschnitt 7c per Screenshot zwei neue Sympto
 **Getestet:** `smoketest_unterschriftenblatt.mjs` komplett neu geschrieben (7/7) - prüft, dass das neue Fenster eine reine HTML-Seite ist (keine `blob:`- oder `.pdf`-URL mehr), den Fenstertitel, beide Tabellenüberschriften, die korrekte Zeilenzahl (56 = 2× 20 Empfangs- + 2× 8 Abrechnungszeilen) und den vorhandenen Drucken-Button. Regressionsstichprobe (Backup-Erinnerung, Abgabeliste, Dashboard, Rezept) erneut grün.
 
 **Für den Nutzer zu prüfen:** Ob "Unterschriften" jetzt auf dem echten Gerät identisch zur Abgabeliste funktioniert (eigenes Fenster mit Drucken-Button, kein Wechsel zu Drive, keine Passwort-Meldung) - und ob der HTML-Nachbau der beiden Formularbereiche inhaltlich für die Praxis ausreicht oder noch Anpassungen (z.B. fehlende/andere Feldbezeichnungen) braucht, da das Original-PDF keine auslesbare Textebene hatte und der Nachbau auf einer visuellen Prüfung des gerenderten Bilds beruht.
+
+---
+
+## 7e. Vierter Nachtrag (gleiche Sitzung): Unterschriftenblatt auf Nutzerwunsch zurückgesetzt auf den ursprünglichen Mechanismus
+
+Der HTML-Nachbau aus Abschnitt 7d ("funktioniert nicht" laut Nutzer - vermutlich inhaltlich nicht ausreichend genau, da er auf einer visuellen Prüfung eines gerenderten Bilds statt echtem PDF-Text beruhte) wurde vom Nutzer klar zurückgewiesen, mit der Anweisung: "schau dir die Funktion in der ursprünglichen Version der App an, da hat es funktioniert, und baue die PDF auf dem gleichen Weg ein."
+
+**Umgesetzt:** Alle drei in dieser Session versuchten Varianten (iframe+Blob mit eigenem Drucken-Button aus Abschnitt 7, Top-Level-Navigation auf eine Blob-URL aus Abschnitt 7c, HTML-Nachbau aus Abschnitt 7d) wieder entfernt. Der Button ruft jetzt wieder exakt den **ursprünglichen, allerersten** Code dieser Funktion auf:
+```js
+document.getElementById("openUnterschriftenblattBtn").onclick = () => {
+  window.open("./vorlagen/unterschriftenblatt.pdf", "_blank");
+};
+```
+Die Netlify-Redirect-Regel für `/vorlagen/*` (die in Abschnitt 7 als Absicherung ergänzt und in Abschnitt 7d wieder entfernt wurde, weil sie zwischenzeitlich nicht mehr gebraucht wurde) ist damit wieder relevant und wurde erneut ergänzt.
+
+**Wichtige Erkenntnis für künftige Sessions:** Alle drei Zwischenversuche, die versucht haben, das Drucken/Anzeigen "clever" zu lösen (Blob-URLs, iframes, eigene Wrapper-Fenster), haben das Verhalten auf dem echten Android-Gerät nachweislich **verschlechtert**, nicht verbessert - keiner davon war aus dieser Sandbox heraus überprüfbar, da Android-spezifisches PDF/Intent-Verhalten in einer Desktop-Playwright-Umgebung nicht reproduzierbar ist. Die einzige Variante, die der Nutzer als tatsächlich funktionierend bestätigt hat, ist der ursprüngliche, einfachste Code. **Falls das Drucken/Öffnen des Unterschriftenblatts in einer künftigen Session erneut als Problem gemeldet wird:** nicht erneut mit Blob-URLs/iframes experimentieren, sondern zuerst beim Nutzer nachfragen, was genau nicht funktioniert (öffnet es sich gar nicht? Fehlt nur ein Drucken-Symbol? Welches Gerät/welcher Browser?), bevor der Code geändert wird.
+
+**Getestet:** `smoketest_unterschriftenblatt.mjs` erneut umgeschrieben (3/3) - prüft jetzt, dass der Klick auf ein neues Fenster/Tab mit der echten PDF-URL führt und dass die Datei vom Server tatsächlich mit Status 200 und `Content-Type: application/pdf` ausgeliefert wird (keine SPA-Rewrite-Verschluckung). Regressionsstichprobe erneut grün.
 
 ---
 
