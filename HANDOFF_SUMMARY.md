@@ -1,6 +1,6 @@
 # FaSt App – Handoff Summary
-**Stand:** 2026-08-22 (Session-Ende, siebte Session inkl. zwei Nachträgen: EmailJS entfernt, Android-Druckbug beim Unterschriftenblatt behoben, Texte gekürzt)
-**Branch:** `claude/fast-app-8-features-xep6yr` (in `/workspace/app-test`, lokal, **57 Commits, weiterhin nicht auf GitHub gepusht (403, siehe Abschnitt 3)**)
+**Stand:** 2026-08-22 (Session-Ende, siebte Session inkl. drei Nachträgen: EmailJS entfernt, Unterschriftenblatt zweimal nachgebessert - jetzt als HTML wie die Abgabeliste)
+**Branch:** `claude/fast-app-8-features-xep6yr` (in `/workspace/app-test`, lokal, **58 Commits, weiterhin nicht auf GitHub gepusht (403, siehe Abschnitt 3)**)
 
 Diese Datei ersetzt die vorherige Version vom 2026-08-22 (sechste Session) vollständig. Die sechste Session (8 vorgegebene Aufgaben) bleibt unten in Abschnitt 6 als historische Dokumentation stehen.
 
@@ -88,6 +88,20 @@ Der Nutzer schickte einen Screenshot vom echten Gerät (Android): Klick auf "Unt
 - Dashboard-Bereich "Backup-Erinnerung": der einleitende Erklärungstext ("Regelmäßige Erinnerung an ein PIN-geschütztes Backup...") entfernt; die Verlaufseinträge zeigen jetzt nur noch Symbol + Datum/Uhrzeit, keinen Nachrichtentext mehr darunter.
 
 **Getestet:** `smoketest_unterschriftenblatt.mjs` angepasst und weiterhin grün (2/2) - prüft jetzt, dass das neue Fenster direkt auf eine `blob:`-URL navigiert statt ein iframe zu laden. `smoketest_backup_reminder.mjs` (11/11, neue Prüfung: Modal erwähnt "PIN" nirgends mehr) und `smoketest_backup_reminder_mailto.mjs` (4/4, angepasst: Verlauf zeigt nur noch den ✅-Eintrag ohne Nachrichtentext) weiterhin grün. Volle Regressionssuite erneut durchlaufen (18 Testdateien) - alle grün, keine Regression.
+
+---
+
+## 7d. Dritter Nachtrag (gleiche Sitzung): Unterschriftenblatt komplett auf HTML umgestellt - selbes PDF-Öffnen-Problem trotz Fix aus Abschnitt 7c
+
+Der Nutzer meldete nach dem Fix aus Abschnitt 7c per Screenshot zwei neue Symptome auf dem echten Android-Gerät: (1) beim Klick auf "Unterschriften" erscheint eine Android-Systemmeldung "Passwort speichern?", (2) das Unterschriftenblatt öffnet sich automatisch in **Google Drive** statt in einem Druck-/Speicherfenster der App. Klare Vorgabe: die Funktion soll sich **exakt wie die Abgabeliste** verhalten.
+
+**Ursache (endgültig):** `window.open(objectUrl, "_blank")` mit einem `blob:`-PDF wird von Android nicht zuverlässig als normale Browser-Navigation behandelt - stattdessen erkennt Android den PDF-Inhaltstyp und reicht ihn per System-Intent an die auf dem Gerät als Standard-PDF-App hinterlegte App weiter (hier: Google Drive), komplett unabhängig davon, WIE das PDF im Code geöffnet wird (direkt, per iframe, per Blob - alle drei Varianten wurden in dieser Session versucht und scheiterten auf demselben Gerät an derselben Grundursache). Die "Passwort speichern?"-Meldung ist vermutlich ein Nebeneffekt desselben App-Wechsels (Android/Chrome-Autofill reagiert unabhängig vom eigentlichen Seiteninhalt auf den Aktivitätswechsel). Das eigentliche Problem: **jede** an das Betriebssystem als PDF erkennbare Datei kann so umgeleitet werden - eine zuverlässige Lösung kann also nicht bei PDF-Anzeige-Tricks ansetzen, sondern muss PDFs komplett vermeiden.
+
+**Endgültiger Fix:** Das Unterschriftenblatt wird nicht mehr als PDF-Datei behandelt. Da `vorlagen/unterschriftenblatt.pdf` keine eingebettete Textebene hat (rein vektorbasiert - mit `pypdf`/`pymupdf` geprüft, `extract_text()` liefert nichts), wurde der Inhalt per Rendering zu einem Bild sichtbar gemacht und als HTML nachgebaut: neue Funktion `renderUnterschriftenblattHtml()` in `ui/views.js` erzeugt eine Tabelle "Empfangsbestätigung durch den Versicherten" (20 Zeilen: Datum / Maßnahmen / Leistungserbringer / Unterschrift des Versicherten) plus ein Feld-Panel "Abrechnungsdaten des Heilmittelerbringers" (Rechnungsnummer, IK, Belegnummer, Behandlungsabbruch-Datum, zwei Checkboxen, Änderung in Gruppen-/Einzeltherapie, Begründungsfeld, Stempel/Unterschrift-Feld) - zwei identische Kopien untereinander, wie im Original-PDF. Der Button ruft jetzt exakt denselben Mechanismus wie "Auswahl drucken" bei der Abgabeliste auf: `openHtmlDocument("Unterschriftenblatt", bodyHtml, { autoPrint: false })` gefolgt von `printWindow.print()` - reines HTML, kein PDF, kein Blob, kein iframe, nichts, das Android an eine externe App weiterreichen könnte. `openPdfPreview()` (die Funktionen aus Abschnitt 7 und 7c) komplett entfernt, ebenso die dafür nicht mehr benötigte Netlify-Redirect-Regel für `/vorlagen/*`. Die Original-PDF-Datei selbst bleibt im Repo liegen (unbenutzt, als Referenz für die Praxis), wird aber von der App nicht mehr angefasst.
+
+**Getestet:** `smoketest_unterschriftenblatt.mjs` komplett neu geschrieben (7/7) - prüft, dass das neue Fenster eine reine HTML-Seite ist (keine `blob:`- oder `.pdf`-URL mehr), den Fenstertitel, beide Tabellenüberschriften, die korrekte Zeilenzahl (56 = 2× 20 Empfangs- + 2× 8 Abrechnungszeilen) und den vorhandenen Drucken-Button. Regressionsstichprobe (Backup-Erinnerung, Abgabeliste, Dashboard, Rezept) erneut grün.
+
+**Für den Nutzer zu prüfen:** Ob "Unterschriften" jetzt auf dem echten Gerät identisch zur Abgabeliste funktioniert (eigenes Fenster mit Drucken-Button, kein Wechsel zu Drive, keine Passwort-Meldung) - und ob der HTML-Nachbau der beiden Formularbereiche inhaltlich für die Praxis ausreicht oder noch Anpassungen (z.B. fehlende/andere Feldbezeichnungen) braucht, da das Original-PDF keine auslesbare Textebene hatte und der Nachbau auf einer visuellen Prüfung des gerenderten Bilds beruht.
 
 ---
 

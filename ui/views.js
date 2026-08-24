@@ -1827,36 +1827,81 @@ function openLetterPreview(title, bodyHtml) {
   openHtmlDocument(title, bodyHtml, { autoPrint: false });
 }
 
-// Android Chrome (u.a. auch als installierte Standalone-PWA) rendert ein
-// per <iframe src="blob:..."> eingebettetes PDF beim Drucken nicht korrekt:
-// die Seitenzahl wird zwar richtig erkannt, aber jede Seite erscheint im
-// Druckdialog nur als generisches Datei-Platzhalter-Symbol statt des
-// tatsächlichen Seiteninhalts (per echtem Gerätetest bestätigt - ein reiner
-// Desktop-/Headless-Test kann diesen gerätespezifischen Rendering-Bug nicht
-// aufdecken, da dort das iframe strukturell korrekt geladen erscheint).
-// Fix: das PDF nicht mehr einbetten, sondern das neue Fenster/den neuen Tab
-// direkt auf die PDF-Datei selbst navigieren lassen - dann übernimmt der
-// eingebaute PDF-Betrachter des Browsers (der als Hauptinhalt einer Seite
-// zuverlässig funktioniert, inkl. eigener Drucken-/Teilen-Symbole) Anzeige
-// und Druck vollständig selbst, ohne eigene Wrapper-Seite/eigenen
-// Drucken-Button.
-async function openPdfPreview(pdfUrl) {
-  try {
-    const response = await fetch(pdfUrl);
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const blob = await response.blob();
-    if (!/pdf/i.test(blob.type) && !/\.pdf(\?|$)/i.test(pdfUrl)) {
-      throw new Error("Antwort war kein PDF");
-    }
-    const objectUrl = URL.createObjectURL(blob);
-    const win = window.open(objectUrl, "_blank");
-    if (!win) {
-      alert("Fenster konnte nicht geöffnet werden. Bitte Pop-up-Blocker für diese Seite erlauben.");
-    }
-  } catch (err) {
-    console.error("PDF konnte nicht geladen werden:", err);
-    alert("Das PDF konnte nicht geladen werden. Bitte Internetverbindung prüfen und erneut versuchen.");
-  }
+// Das Öffnen der echten PDF-Datei (per fetch+Blob eingebettet oder direkt
+// als Top-Level-Navigation) hat sich auf Android als nicht verlässlich
+// erwiesen: mal wurde nur ein Platzhalter statt des Seiteninhalts gedruckt,
+// mal übernahm Android eine externe App (z.B. Google Drive) die Anzeige
+// komplett, ganz ohne Drucken-/Speichern-Möglichkeit innerhalb der App -
+// beides Symptome davon, dass Android eine PDF-Datei grundsätzlich per
+// eigenem Intent an eine (Dritt-)App weiterreichen kann, sobald sie dem
+// Betriebssystem als solche erkennbar ist, unabhängig davon, wie sie im
+// Code geöffnet wird. Der zuverlässige Weg, der bei allen anderen
+// druckbaren Dokumenten der App (Abgabeliste, Therapiebericht, ...) bereits
+// funktioniert: eine reine HTML-Seite über openHtmlDocument() plus
+// window.print() - kein PDF, kein Blob, nichts, das Android an eine externe
+// App weiterreichen könnte. Das Unterschriftenblatt (vorlagen/
+// unterschriftenblatt.pdf) hat keine eingebettete Textebene (rein
+// vektorbasiert), daher hier als gleichwertige HTML-Tabelle nachgebaut statt
+// die PDF-Datei weiter zu verwenden.
+function renderUnterschriftenblattCopyHtml() {
+  const rows = Array.from({ length: 20 }, (_, i) => 20 - i);
+  return `
+    <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start;">
+      <div style="flex:2; min-width:280px;">
+        <h2 style="margin:0 0 4px 0;">Empfangsbestätigung durch den Versicherten</h2>
+        <p class="muted" style="margin-top:0;">Ich bestätige, die im Folgenden aufgeführten Behandlungen erhalten zu haben.</p>
+        <table>
+          <thead>
+            <tr>
+              <th style="width:32px;">Nr.</th>
+              <th>Datum</th>
+              <th>Maßnahmen (erhaltene Heilmittel, ggf. auch Hausbesuche)</th>
+              <th>Leistungserbringer</th>
+              <th>Unterschrift des Versicherten</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map((n) => `
+              <tr>
+                <td>${n}</td>
+                <td>&nbsp;</td>
+                <td>&nbsp;</td>
+                <td>&nbsp;</td>
+                <td>&nbsp;</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+      <div style="flex:1; min-width:220px;">
+        <h3 style="margin:0 0 4px 0;">Abrechnungsdaten des Heilmittelerbringers</h3>
+        <table>
+          <tbody>
+            <tr><th style="width:45%;">Rechnungsnummer</th><td>&nbsp;</td></tr>
+            <tr><th>IK des Leistungserbringers</th><td>&nbsp;</td></tr>
+            <tr><th>Belegnummer</th><td>&nbsp;</td></tr>
+            <tr><th>Behandlungsabbruch</th><td>T T . M M . J J</td></tr>
+            <tr><th>Nach Rücksprache mit dem Arzt</th><td>☐</td></tr>
+            <tr><th>Abweichung von der Frequenz</th><td>☐</td></tr>
+            <tr><th>Änderung in Gruppentherapie</th><td>☐</td></tr>
+            <tr><th>Änderung in Einzeltherapie</th><td>☐</td></tr>
+          </tbody>
+        </table>
+        <p style="margin-bottom:4px;"><strong>Begründung</strong></p>
+        <div style="border:1px solid #d1d5db; border-radius:6px; height:60px;"></div>
+        <p style="margin-bottom:4px; margin-top:12px;"><strong>Stempel/Unterschrift des Leistungserbringers</strong></p>
+        <div style="border:1px solid #d1d5db; border-radius:6px; height:80px;"></div>
+      </div>
+    </div>
+  `;
+}
+
+function renderUnterschriftenblattHtml() {
+  return `
+    ${renderUnterschriftenblattCopyHtml()}
+    <hr style="margin:24px 0; border:0; border-top:2px dashed #9ca3af;">
+    ${renderUnterschriftenblattCopyHtml()}
+  `;
 }
 
 function formatIsoDateShort(value) {
@@ -2941,7 +2986,9 @@ export function showDashboardView({ onLock, keepOverviewOpen = false } = {}) {
   document.getElementById("openNachbestellBtn").onclick = () => showNachbestellungView({ onLock });
   document.getElementById("openKilometerBtn").onclick = () => showKilometerView({ onLock });
   document.getElementById("openUnterschriftenblattBtn").onclick = () => {
-    openPdfPreview("./vorlagen/unterschriftenblatt.pdf");
+    const printWindow = openHtmlDocument("Unterschriftenblatt", renderUnterschriftenblattHtml(), { autoPrint: false });
+    if (!printWindow) return;
+    printWindow.print();
   };
   document.getElementById("openSupportBtn").onclick = () => {
     window.open("https://physiofast.wixsite.com/fast-support", "_blank");

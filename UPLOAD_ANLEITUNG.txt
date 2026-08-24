@@ -1,6 +1,6 @@
 FaSt App – Vollständiger App-Stand für ein GitHub-Repo
 ================================================================
-Stand: 2026-08-22, siebte Session inkl. zwei Nachträgen, Version 3.9.31
+Stand: 2026-08-22, siebte Session inkl. drei Nachträgen, Version 3.9.32
 
 Diese ZIP enthält den KOMPLETTEN, lauffähigen und getesteten Stand der
 App (alle Dateien außer dem separaten Viewer), direkt aus der
@@ -9,23 +9,29 @@ getesteten Arbeitsumgebung exportiert.
 Der Viewer wird wie gewünscht separat als eigene Datei bereitgestellt
 (FaSt-Viewer.zip) - diese ZIP hier ist ausschließlich die Haupt-App.
 
-Neu in dieser Version
+WICHTIGSTE Änderung in dieser Version
 ----------------------------------------------------------------------
-1. Unterschriftenblatt: Android-Druckbug behoben. Öffnet sich jetzt
-   direkt im nativen PDF-Betrachter des Browsers (statt in einem
-   eigenen Wrapper-Fenster) - dort funktioniert Drucken/Teilen
-   zuverlässig, auch auf Android-Geräten.
-2. EmailJS komplett entfernt: Der automatische Hintergrundversand des
-   Viewer-Backups per E-Mail gibt es nicht mehr. Stattdessen erscheint
-   beim Öffnen der App eine Backup-Erinnerung (aktuell täglich zum
-   Testen, künftig alle 4 Wochen), sobald das Intervall abgelaufen
-   ist, mit drei Optionen: Backup herunterladen, per E-Mail senden
-   (öffnet das E-Mail-Programm, Anhang muss manuell hinzugefügt
-   werden - Betreff einfach "Backup <Therapeutenname>"), oder später
-   erinnern.
-3. Texte in der Backup-Erinnerung gekürzt: keine PIN-Erklärung mehr im
-   Hinweis-Fenster, im Dashboard-Bereich "Backup-Erinnerung" zeigt der
-   Verlauf jetzt nur noch Datum/Uhrzeit ohne Erklärtext.
+Unterschriftenblatt: Nach zwei fehlgeschlagenen Versuchen, das echte
+PDF zuverlässig zu öffnen (Android hat es immer wieder an eine externe
+App wie Google Drive weitergereicht, ganz ohne Druckmöglichkeit),
+wurde die Funktion komplett umgestellt. Sie funktioniert jetzt exakt
+wie die Abgabeliste: ein eigenes Fenster mit reinem HTML-Inhalt (Tabelle
+"Empfangsbestätigung durch den Versicherten" + Feld "Abrechnungsdaten
+des Heilmittelerbringers", nachgebaut aus dem Original-PDF) und einem
+eigenen "Drucken"-Button. Kein PDF, kein Blob mehr - Android hat damit
+keine Möglichkeit mehr, die Anzeige an eine andere App weiterzureichen.
+
+Weitere Änderungen aus dieser Session
+----------------------------------------------------------------------
+- EmailJS komplett entfernt: Der automatische Hintergrundversand des
+  Viewer-Backups per E-Mail gibt es nicht mehr. Stattdessen erscheint
+  beim Öffnen der App eine Backup-Erinnerung (aktuell täglich zum
+  Testen, künftig alle 4 Wochen) mit drei Optionen: Backup
+  herunterladen, per E-Mail senden (öffnet das E-Mail-Programm, Anhang
+  muss manuell hinzugefügt werden), oder später erinnern.
+- Texte in der Backup-Erinnerung gekürzt (keine PIN-Erklärung mehr,
+  E-Mail-Betreff nur noch "Backup <Therapeutenname>", Verlauf zeigt
+  nur noch Datum/Uhrzeit).
 
 So laden Sie ein neues GitHub-Repo hoch
 ------------------------------------------
@@ -61,12 +67,7 @@ Datei "modules/autoExport.js" existiert in dieser Version nicht mehr
 (durch "modules/backupReminder.js" ersetzt) - falls sie in Ihrem
 bestehenden Repo noch vorhanden ist, bitte manuell löschen.
 
-Details siehe HANDOFF_SUMMARY.md, Abschnitt "7c" (aktuellster Stand).
-
-Deployment (z.B. Netlify)
---------------------------
-netlify.toml enthält eine explizite Regel, die /vorlagen/* von der
-SPA-Weiterleitung ausnimmt (fürs Unterschriftenblatt-PDF).
+Details siehe HANDOFF_SUMMARY.md, Abschnitt "7d" (aktuellster Stand).
 
 Bei Fragen oder falls nach dem Hochladen etwas nicht funktioniert:
 bitte mit genauer Fehlerbeschreibung/Screenshot zurückmelden.
