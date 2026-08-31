@@ -389,7 +389,6 @@ function normalizePatient(patient) {
     anrede: ensureEnum(source.anrede, ["frau", "herr"], ""),
     birthDate: ensureDeDateString(source.birthDate),
     befreit: ensureBoolean(source.befreit, false),
-    hb: ensureBoolean(source.hb, false),
     verstorben: ensureBoolean(source.verstorben, false),
     zuzahlungsstatus: ensureZuzahlungsstatus(source.zuzahlungsstatus),
     zuzahlungsstatusSetAt: ensureIsoString(source.zuzahlungsstatusSetAt),

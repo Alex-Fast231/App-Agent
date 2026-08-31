@@ -1,10 +1,14 @@
 import { generateId } from "../core/utils.js";
 
 export const APP_SCHEMA_VERSION = 3;
-export const APP_VERSION = "3.9.33";
+export const APP_VERSION = "3.9.35";
 export const APP_MODULE = "doku";
 
-export const PRACTICE_ADDRESS = ``;
+export const PRACTICE_ADDRESS = `Physio Strobl
+- Abteilung FaSt -
+Münchener Str. 155
+85051 Ingolstadt`;
+export const PRACTICE_PHONE = "0841-45674267";
 
 export function createEmptyAppData() {
   const now = new Date().toISOString();
@@ -20,7 +24,7 @@ export function createEmptyAppData() {
       therapistId: generateId("therapist"),
       therapistName: "",
       therapistFax: "",
-      practicePhone: "",
+      practicePhone: PRACTICE_PHONE,
       practiceAddress: PRACTICE_ADDRESS,
       workDays: [],
       weeklyHours: "",

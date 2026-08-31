@@ -1,4 +1,4 @@
-import { createEmptyAppData, APP_VERSION } from "../data/schema.js";
+import { createEmptyAppData, APP_VERSION, PRACTICE_ADDRESS, PRACTICE_PHONE } from "../data/schema.js";
 import { setupSecurity, unlockWithPIN } from "../security/auth.js";
 import { getRemainingLockoutMs } from "../security/lock.js";
 import {
@@ -372,18 +372,6 @@ function collectAllTimeEntries(data) {
     });
   });
   return rows;
-}
-
-function getTotalTrackedMinutes(data, targetDate = "") {
-  const normalizedDate = String(targetDate || '').trim();
-  const fastStartComparable = getFastStartDatumComparable(data?.settings);
-  return collectAllTimeEntries(data)
-    .filter((entry) => !normalizedDate || entry.date === normalizedDate)
-    .filter((entry) => {
-      const entryComparable = parseDeDate(entry.date);
-      return !fastStartComparable || !entryComparable || entryComparable >= fastStartComparable;
-    })
-    .reduce((sum, entry) => sum + entry.minutes, 0);
 }
 
 function getTimePeriodSummary(data, fromDate, toDate) {
@@ -1865,7 +1853,7 @@ function flattenNachbestellLines(letterData = {}) {
       (patient.rezepte || []).map((rezept) => ({
         patient: patient.patientName || "",
         geb: patient.geb || "",
-        heim: group.type === "hausbesuch" ? "Hausbesuch" : (group.title || ""),
+        heim: group.title || "",
         text: rezept.text || ""
       }))
     )
@@ -2205,8 +2193,19 @@ export function hideLockButton() {
   lockBtn.onclick = null;
 }
 
+// Das Praxispasswort ist auf Nutzerwunsch fest vorgegeben (gilt für die
+// App-Verschlüsselung UND alle Backups) statt frei wählbar zu sein. Bewusst
+// nicht als Klartext-String im Quellcode, damit es bei einem oberflächlichen
+// Blick in den Code (z.B. per GitHub-Suche) nicht sofort auffällt - das ist
+// keine echte Sicherheitsmaßnahme (jeder mit Lesezugriff auf den Code kann
+// es trivial decodieren), nur ein Schutz gegen zufälliges Auffinden.
+const FIXED_PRACTICE_PASSWORD_ENCODED = "RmFsbG1hbm4uU3Ryb2Js";
+function getFixedPracticePassword() {
+  return atob(FIXED_PRACTICE_PASSWORD_ENCODED);
+}
+
 function requestPracticePasswordForBackup() {
-  return window.prompt("Bitte Praxispasswort eingeben:", "") || "";
+  return getFixedPracticePassword();
 }
 
 async function runBackupImportFlow({ file, messageElement, successMessage, beforeReload }) {
@@ -2255,12 +2254,11 @@ export function showSetupView({ onSuccess }) {
       <label for="therapistName">Therapeutenname</label>
       <input id="therapistName" type="text" autocomplete="off">
 
-      <label for="practiceAddress">Praxisadresse</label>
-      <textarea id="practiceAddress" rows="3" autocomplete="off">Münchener Str. 155
-85051 Ingolstadt</textarea>
+      <label>Praxisadresse</label>
+      <p class="muted" style="white-space:pre-line; border:1px solid var(--border); border-radius:10px; padding:10px 12px; margin-top:4px;">${escapeHtml(PRACTICE_ADDRESS)}</p>
 
-      <label for="practicePhone">Telefon</label>
-      <input id="practicePhone" type="tel" inputmode="numeric" autocomplete="off">
+      <label>Telefon</label>
+      <p class="muted" style="border:1px solid var(--border); border-radius:10px; padding:10px 12px; margin-top:4px;">${escapeHtml(PRACTICE_PHONE)}</p>
 
       <label for="therapistFax">Faxnummer</label>
       <input id="therapistFax" type="tel" inputmode="numeric" autocomplete="off">
@@ -2278,9 +2276,6 @@ export function showSetupView({ onSuccess }) {
       <label for="stundenStartsaldo">Startsaldo Stundenkonto</label>
       <input id="stundenStartsaldo" type="text" inputmode="numeric" autocomplete="off" placeholder="z. B. +40:00 oder -12:30">
       <p class="muted">Plus-/Minusstunden vor App-Einführung. Wird zum Stundenkonto addiert.</p>
-
-      <label for="practicePassword">Praxispasswort</label>
-      <input id="practicePassword" type="password" autocomplete="new-password">
 
       <label for="workflowPin">PIN (mindestens 6 Zeichen)</label>
       <input id="workflowPin" type="password" inputmode="numeric" autocomplete="new-password">
@@ -2318,15 +2313,15 @@ export function showSetupView({ onSuccess }) {
 
   document.getElementById("saveSetupBtn").onclick = async () => {
     const therapistName = document.getElementById("therapistName").value.trim();
-    const practiceAddress = document.getElementById("practiceAddress").value.trim();
-    const practicePhone = document.getElementById("practicePhone").value.trim();
+    const practiceAddress = PRACTICE_ADDRESS;
+    const practicePhone = PRACTICE_PHONE;
     const therapistFax = document.getElementById("therapistFax").value.trim();
     const workDays = WORK_DAY_OPTIONS.filter((day) => document.getElementById(`setupWorkDay-${day}`)?.checked);
     const weeklyHours = normalizeWeeklyHoursInput(document.getElementById("weeklyHours").value);
     const fastStartDatumInput = document.getElementById("fastStartDatum").value.trim();
     const fastStartDatum = fastStartDatumInput ? parseDeDate(fastStartDatumInput) : "";
     const stundenStartsaldoMinuten = parseStundenStartsaldoInput(document.getElementById("stundenStartsaldo").value);
-    const password = document.getElementById("practicePassword").value;
+    const password = getFixedPracticePassword();
     const pin = document.getElementById("workflowPin").value;
     const pinRepeat = document.getElementById("workflowPinRepeat").value;
     const msg = document.getElementById("setupMessage");
@@ -2346,11 +2341,6 @@ export function showSetupView({ onSuccess }) {
 
     if (stundenStartsaldoMinuten === null) {
       msg.textContent = "Der Startsaldo muss im Format +HH:MM oder -HH:MM eingegeben werden, z. B. +40:00.";
-      return;
-    }
-
-    if (!password || password.length < 8) {
-      msg.textContent = "Das Praxispasswort muss mindestens 8 Zeichen haben.";
       return;
     }
 
@@ -2490,45 +2480,7 @@ export function showLoginView({ onSuccess }) {
 // die bei manchen Geräten bereits nach 3-4 Tagen Nichtnutzung greifen kann
 // und dabei den App-Speicher (inkl. IndexedDB) zurücksetzen kann. Häufigere
 // Erinnerungen sollen das Risiko eines folgenlosen Datenverlusts reduzieren.
-const BACKUP_WARNING_DAYS = 5;
-const BACKUP_NOTICE_DAYS = 3;
-
-function getBackupWarning(lastBackupAt) {
-  if (!lastBackupAt) {
-    return {
-      level: "error",
-      text: "⚠️ Noch kein Backup erstellt. Bitte jetzt unter Einstellungen ein Backup exportieren."
-    };
-  }
-
-  const lastBackupDate = new Date(lastBackupAt);
-  if (Number.isNaN(lastBackupDate.getTime())) {
-    return null;
-  }
-
-  const daysSince = Math.floor((Date.now() - lastBackupDate.getTime()) / (1000 * 60 * 60 * 24));
-
-  if (daysSince >= BACKUP_WARNING_DAYS) {
-    return {
-      level: "error",
-      text: `⚠️ Letztes Backup vor ${daysSince} Tagen. Bitte zeitnah ein neues Backup exportieren.`
-    };
-  }
-
-  if (daysSince >= BACKUP_NOTICE_DAYS) {
-    return {
-      level: "warning",
-      text: `Letztes Backup vor ${daysSince} Tagen.`
-    };
-  }
-
-  return null;
-}
-
-function renderDashboardHeaderCard({ therapistName, lastBackupAt = "" }) {
-  const backupWarning = getBackupWarning(lastBackupAt);
-  const warningColor = backupWarning?.level === "error" ? "#b91c1c" : "#92400e";
-
+function renderDashboardHeaderCard({ therapistName }) {
   return `
     <div class="card">
       <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px;">
@@ -2539,7 +2491,6 @@ function renderDashboardHeaderCard({ therapistName, lastBackupAt = "" }) {
         </div>
         <button id="openSettingsBtn" class="secondary" title="Einstellungen bearbeiten" aria-label="Einstellungen bearbeiten" style="width:auto; margin-top:0; padding:10px 12px; min-width:48px; font-size:20px; line-height:1;">⚙️</button>
       </div>
-      ${backupWarning ? `<p style="color:${warningColor}; font-weight:600; margin-top:10px; margin-bottom:0;">${escapeHtml(backupWarning.text)}</p>` : ""}
     </div>
   `;
 }
@@ -2562,11 +2513,11 @@ export function showSettingsView({ onLock }) {
       <label for="settingsTherapistName">Therapeutenname</label>
       <input id="settingsTherapistName" type="text" autocomplete="off" value="${escapeHtml(settings.therapistName || "")}">
 
-      <label for="settingsPracticeAddress">Praxisadresse</label>
-      <textarea id="settingsPracticeAddress" rows="3" autocomplete="off">${escapeHtml(settings.practiceAddress || "")}</textarea>
+      <label>Praxisadresse</label>
+      <p class="muted" style="white-space:pre-line; border:1px solid var(--border); border-radius:10px; padding:10px 12px; margin-top:4px;">${escapeHtml(PRACTICE_ADDRESS)}</p>
 
-      <label for="settingsPracticePhone">Telefon</label>
-      <input id="settingsPracticePhone" type="tel" inputmode="numeric" autocomplete="off" value="${escapeHtml(settings.practicePhone || "")}">
+      <label>Telefon</label>
+      <p class="muted" style="border:1px solid var(--border); border-radius:10px; padding:10px 12px; margin-top:4px;">${escapeHtml(PRACTICE_PHONE)}</p>
 
       <label for="settingsTherapistFax">Faxnummer</label>
       <input id="settingsTherapistFax" type="tel" inputmode="numeric" autocomplete="off" value="${escapeHtml(settings.therapistFax || "")}">
@@ -2623,8 +2574,8 @@ export function showSettingsView({ onLock }) {
 
   document.getElementById("saveSettingsBtn").onclick = async () => {
     const therapistName = document.getElementById("settingsTherapistName").value.trim();
-    const practiceAddress = document.getElementById("settingsPracticeAddress").value.trim();
-    const practicePhone = document.getElementById("settingsPracticePhone").value.trim();
+    const practiceAddress = PRACTICE_ADDRESS;
+    const practicePhone = PRACTICE_PHONE;
     const therapistFax = document.getElementById("settingsTherapistFax").value.trim();
     const workDays = WORK_DAY_OPTIONS.filter((day) => document.getElementById(`settingsWorkDay-${day}`)?.checked);
     const weeklyHours = normalizeWeeklyHoursInput(document.getElementById("settingsWeeklyHours").value);
@@ -2746,13 +2697,19 @@ export function showDashboardView({ onLock, keepOverviewOpen = false } = {}) {
   const therapistName = runtimeData?.settings?.therapistName || "—";
   const lastBackupAt = runtimeData?.ui?.lastBackupAt || "";
   const todayDate = formatCurrentDateShort();
-  const totalTrackedMinutes = getTotalTrackedMinutes(runtimeData, todayDate);
   const dashboardTodayPatients = getDashboardTodayPatients(runtimeData, todayDate);
+  // Bewusst aus derselben Liste wie "Patienten heute" berechnet (statt der
+  // früheren getTotalTrackedMinutes(), die zusätzlich nach dem
+  // Stundenkonto-Startdatum gefiltert hat) - das führte dazu, dass "Stunden
+  // heute" 0:00 zeigte, obwohl "Patienten heute" bereits Einträge für den
+  // Tag auflistete: der Stundenkonto-Cutoff gehört zur Saldo-Berechnung,
+  // nicht zu einer reinen Tagesübersicht der tatsächlich erfassten Zeit.
+  const totalTrackedMinutes = dashboardTodayPatients.reduce((s, r) => s + r.totalMinutes, 0);
   const zuzahlungErinnerungen = getFaelligeZuzahlungErinnerungen(runtimeData);
   const assessmentErinnerungen = getFaelligeAssessmentErinnerungen(runtimeData);
 
   render(`
-    ${renderDashboardHeaderCard({ therapistName, lastBackupAt })}
+    ${renderDashboardHeaderCard({ therapistName })}
 
     ${zuzahlungErinnerungen.length > 0 ? `
       <div class="card" style="background:#fffbeb; border-color:#f59e0b;">
@@ -3390,7 +3347,6 @@ export function showHomeDetailView({ onLock, homeId, searchText = "" }) {
               <div class="accordion-body">
                 <div style="margin-bottom:10px;">
                   ${patient.befreit ? `<span class="pill">Befreit</span>` : ""}
-                  ${patient.hb ? `<span class="pill">HB</span>` : ""}
                   ${patient.verstorben ? `<span class="pill-red">Verstorben</span>` : ""}
                 </div>
 
@@ -3442,7 +3398,6 @@ export function showHomeDetailView({ onLock, homeId, searchText = "" }) {
                   <div class="compact-card" style="margin-bottom:10px;">
                     <label for="quickDocDate-${patient.patientId}">Behandlungsdatum</label>
                     <input id="quickDocDate-${patient.patientId}" class="quickDocDateInput" type="text" value="${escapeHtml(formatCurrentDateShort())}" placeholder="TT.MM.JJJJ" inputmode="numeric">
-                    <div class="compact-meta" style="margin-top:6px;">Dieses Datum gilt für die SchnellDoku und die automatische Zeitbuchung.</div>
                   </div>
                   ${quickDocRezepte.length === 0 ? `<p class="muted">Keine Rezepte für SchnellDoku vorhanden.</p>` : quickDocRezepte.length === 1 ? `
                     <div class="compact-card" style="margin-bottom:10px;">
@@ -3485,7 +3440,6 @@ export function showHomeDetailView({ onLock, homeId, searchText = "" }) {
                   <input id="edit-birthDate-${patient.patientId}" type="text" value="${escapeHtml(patient.birthDate || "")}" inputmode="numeric" placeholder="TT.MM.JJJJ">
 
                   <div class="checkbox-row">
-                    <label class="check-chip"><input id="edit-hb-${patient.patientId}" type="checkbox" ${patient.hb ? "checked" : ""}> <span>Hausbesuch</span></label>
                     <label class="check-chip"><input id="edit-verstorben-${patient.patientId}" type="checkbox" ${patient.verstorben ? "checked" : ""}> <span>Verstorben</span></label>
                   </div>
 
@@ -3633,7 +3587,6 @@ export function showHomeDetailView({ onLock, homeId, searchText = "" }) {
           firstName: document.getElementById(`edit-firstName-${patientId}`).value.trim(),
           lastName: document.getElementById(`edit-lastName-${patientId}`).value.trim(),
           birthDate: document.getElementById(`edit-birthDate-${patientId}`).value.trim(),
-          hb: document.getElementById(`edit-hb-${patientId}`).checked,
           verstorben: document.getElementById(`edit-verstorben-${patientId}`).checked
         });
 
@@ -4007,10 +3960,6 @@ export function showCreatePatientRezeptView({ onLock, homeId, searchText = "" })
 
         <label for="birthDate">Geburtsdatum</label>
         <input id="birthDate" type="text" placeholder="TT.MM.JJJJ" inputmode="numeric" value="">
-
-        <div class="checkbox-row">
-          <label class="check-chip"><input id="hb" type="checkbox"> <span>Hausbesuch</span></label>
-        </div>
       </div>
 
       <div class="card">
@@ -4087,7 +4036,6 @@ export function showCreatePatientRezeptView({ onLock, homeId, searchText = "" })
       const lastName = document.getElementById("lastName").value.trim();
       const anrede = document.getElementById("anrede").value;
       const birthDate = document.getElementById("birthDate").value.trim();
-      const hb = document.getElementById("hb").checked;
 
       if (!firstName && !lastName) {
         msg.textContent = "Bitte mindestens einen Namen für den Patienten eingeben.";
@@ -4106,8 +4054,7 @@ export function showCreatePatientRezeptView({ onLock, homeId, searchText = "" })
           lastName,
           anrede,
           birthDate,
-          befreit: false,
-          hb
+          befreit: false
         });
         createRezept(homeId, newPatientId, rezeptPayload);
         const arztAdresse = collectArztAdresseFromForm();
@@ -5247,7 +5194,6 @@ export function showPatientDetailView({ onLock, homeId, patientId }) {
         <p><strong>Vorname:</strong> ${escapeHtml(patient.firstName || "—")}</p>
         <p><strong>Geburtsdatum:</strong> ${escapeHtml(patient.birthDate || "—")}</p>
         <p><strong>Befreit:</strong> ${patient.befreit ? "Ja" : "Nein"}</p>
-        <p><strong>Hausbesuch:</strong> ${patient.hb ? "Ja" : "Nein"}</p>
         <p><strong>Verstorben:</strong> ${patient.verstorben ? "Ja" : "Nein"}</p>
         <button id="deletePatientBtn" class="danger" style="margin-top:16px; width:100%;">Patient löschen</button>
       </div>

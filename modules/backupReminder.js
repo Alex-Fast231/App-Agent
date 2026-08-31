@@ -13,11 +13,10 @@ import { mutateRuntimeData, queuePersistRuntimeData } from "../core/app-core.js"
 // Fehlschlagpfad mehr, der Therapeut sieht direkt, ob das Backup
 // tatsächlich erstellt wurde.
 //
-// Vorgabe des Nutzers: aktuell im Testbetrieb täglich, künftig auf alle
-// 4 Wochen umstellen - dafür hier einfach auf 28 ändern, die
-// Kalendertag-Zählung in isBackupReminderDue() funktioniert unverändert
-// für jeden Intervallwert.
-const BACKUP_REMINDER_INTERVAL_DAYS = 1;
+// Vorgabe des Nutzers: nach abgeschlossenem Testbetrieb auf alle 4 Wochen
+// umgestellt (vorher täglich zum Testen) - die Kalendertag-Zählung in
+// isBackupReminderDue() funktioniert unverändert für jeden Intervallwert.
+const BACKUP_REMINDER_INTERVAL_DAYS = 28;
 
 // Vorausgefüllte Zieladresse für den mailto-Link (Vorgabe des Nutzers,
 // unverändert aus der vorherigen EmailJS-Version). Der Therapeut kann sie
