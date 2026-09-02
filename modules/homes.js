@@ -1056,6 +1056,7 @@ export function createRezept(homeId, patientId, payload) {
       hausbesuch: payload.hausbesuch === "ja" || payload.hausbesuch === "nein" ? payload.hausbesuch : "",
       arztStempel: payload.arztStempel === "ja" || payload.arztStempel === "nein" ? payload.arztStempel : "",
       arztUnterschrift: payload.arztUnterschrift === "ja" || payload.arztUnterschrift === "nein" ? payload.arztUnterschrift : "",
+      privat: payload.privat === true,
       abgegeben: false,
       items,
       entries: [],
@@ -1105,6 +1106,7 @@ export function updateRezept(homeId, patientId, rezeptId, payload) {
     rezept.hausbesuch = payload.hausbesuch === "ja" || payload.hausbesuch === "nein" ? payload.hausbesuch : "";
     rezept.arztStempel = payload.arztStempel === "ja" || payload.arztStempel === "nein" ? payload.arztStempel : "";
     rezept.arztUnterschrift = payload.arztUnterschrift === "ja" || payload.arztUnterschrift === "nein" ? payload.arztUnterschrift : "";
+    rezept.privat = payload.privat === true;
     rezept.abgegeben = rezept.abgegeben === true;
     rezept.items = items;
 

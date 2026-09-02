@@ -13,6 +13,14 @@ const JA_NEIN_LABELS = {
 
 export function validateRezeptPflichtfelder(rezept) {
   const r = rezept || {};
+
+  // Privatrezepte unterliegen keinen Kassenregeln (keine Pflichtfelder,
+  // keine Behandlungsfristen) - auf Nutzerwunsch komplett von der Prüfung
+  // ausgenommen.
+  if (r.privat) {
+    return { ok: true, errors: [], fristInfo: getRezeptFristInfo(r), privat: true };
+  }
+
   const errors = [];
 
   if (!String(r.icd10 || "").trim()) {

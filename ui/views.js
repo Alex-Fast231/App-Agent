@@ -151,11 +151,12 @@ function renderRezeptMarkerLine(rezept, frist) {
 
   return `
     <div style="margin-bottom:8px;">
+      ${rezept.privat ? `<span class="pill">🔒 Privat</span>` : ""}
       ${rezept.bg ? `<span class="pill">BG</span>` : ""}
       ${rezept.dt ? `<span class="pill">DT</span>` : ""}
       ${rezept.dringend ? `<span class="pill">Dringend</span>` : ""}
       ${blanko ? `<span class="pill">Blanko</span>` : ""}
-      <span class="${trafficClass}">${escapeHtml(frist.statusText || "Frist")}</span>
+      ${rezept.privat ? "" : `<span class="${trafficClass}">${escapeHtml(frist.statusText || "Frist")}</span>`}
     </div>
   `;
 }
@@ -1074,10 +1075,10 @@ function renderJaNeinSelect(id, value) {
 }
 
 const LEITSYMPTOMATIK_OPTIONEN = [
-  { val: "a", label: "a) Schädigung der Motorik", text: "a) Schädigung der Motorik (Bewegungs-, Koordinations- oder Kraftdefizit)" },
-  { val: "b", label: "b) Schädigung der Sensibilität", text: "b) Schädigung der Sensibilität / Wahrnehmung" },
-  { val: "c", label: "c) Sonstige Schädigung", text: "c) Schädigung sonstiger Art mit Auswirkung auf die Bewegungsfähigkeit" },
-  { val: "custom", label: "Patientenindividuell (Freitext)", text: "" }
+  { val: "a", label: "A", text: "a) Schädigung der Motorik (Bewegungs-, Koordinations- oder Kraftdefizit)" },
+  { val: "b", label: "B", text: "b) Schädigung der Sensibilität / Wahrnehmung" },
+  { val: "c", label: "C", text: "c) Schädigung sonstiger Art mit Auswirkung auf die Bewegungsfähigkeit" },
+  { val: "custom", label: "Patient individuell", text: "" }
 ];
 
 // Leitsymptomatik wird intern weiterhin als ein einzelner String gespeichert
@@ -1101,16 +1102,16 @@ function renderLeitsymptomatikField(currentValue) {
   return `
     <label>Leitsymptomatik</label>
     <p class="muted" style="margin-top:-4px;">Mehrfachauswahl möglich.</p>
-    <div class="checkbox-row checkbox-row-column">
+    <div class="checkbox-row">
       ${LEITSYMPTOMATIK_OPTIONEN.filter((opt) => opt.val !== "custom").map((opt) => `
-        <label class="check-chip" style="justify-content:flex-start; margin-bottom:6px;">
+        <label class="check-chip">
           <input type="checkbox" name="leitsymptomatikWahl" class="leitsymptomatikWahl" value="${escapeHtml(opt.val)}" ${selected.has(opt.val) ? "checked" : ""}>
           <span>${escapeHtml(opt.label)}</span>
         </label>
       `).join("")}
-      <label class="check-chip" style="justify-content:flex-start; margin-bottom:6px;">
+      <label class="check-chip">
         <input type="checkbox" id="leitsymptomatikCustomToggle" ${customText ? "checked" : ""}>
-        <span>Patientenindividuell (Freitext)</span>
+        <span>Patient individuell</span>
       </label>
     </div>
     <div id="leitsymptomatikCustomWrap" style="display:${customText ? "block" : "none"};">
@@ -1565,11 +1566,15 @@ function collectRezeptFormPayload() {
     hausbesuch: document.getElementById("hausbesuch").value,
     arztStempel: document.getElementById("arztStempel").value,
     arztUnterschrift: document.getElementById("arztUnterschrift").value,
+    privat: document.getElementById("privat")?.checked || false,
     items: collectRezeptItemsFromForm()
   };
 }
 
 function renderRezeptPruefungPanel(validation) {
+  if (validation.privat) {
+    return `<p class="pill-green">🔒 Privatrezept — keine Kassenregeln, keine Pflichtfeld-Prüfung nötig.</p>`;
+  }
   if (validation.ok) {
     return `<p class="pill-green">✓ Alle Pflichtfelder vollständig · Fristen ok</p>`;
   }
@@ -1594,7 +1599,7 @@ function bindRezeptPruefungLive(panelId) {
     panel.innerHTML = renderRezeptPruefungPanel(validation);
   };
 
-  ["arzt", "ausstell", "bg", "dt", "dringend", "icd10", "icd10b", "leitsymptomatik", "hausbesuch", "arztStempel", "arztUnterschrift"]
+  ["arzt", "ausstell", "bg", "dt", "dringend", "icd10", "icd10b", "leitsymptomatik", "hausbesuch", "arztStempel", "arztUnterschrift", "privat"]
     .forEach((id) => {
       const el = document.getElementById(id);
       if (el) el.addEventListener("input", refresh);
@@ -3988,6 +3993,9 @@ export function showCreatePatientRezeptView({ onLock, homeId, searchText = "" })
 
         <h3 style="margin-top:20px;">Rezeptprüfung</h3>
         <div class="checkbox-row">
+          <label class="check-chip"><input id="privat" type="checkbox"> <span>🔒 Privat (keine Prüfung nötig)</span></label>
+        </div>
+        <div class="checkbox-row">
           <label class="check-chip"><input id="bg" type="checkbox"> <span>BG</span></label>
           <label class="check-chip"><input id="dt" type="checkbox"> <span>Doppeltermin</span></label>
           <label class="check-chip"><input id="dringend" type="checkbox"> <span>Dringender Bedarf</span></label>
@@ -5577,6 +5585,9 @@ export function showCreateRezeptView({ onLock, homeId, patientId, prefill = null
 
       <h3 style="margin-top:20px;">Rezeptprüfung</h3>
       <div class="checkbox-row">
+        <label class="check-chip"><input id="privat" type="checkbox"> <span>🔒 Privat (keine Prüfung nötig)</span></label>
+      </div>
+      <div class="checkbox-row">
         <label class="check-chip"><input id="bg" type="checkbox"> <span>BG</span></label>
         <label class="check-chip"><input id="dt" type="checkbox"> <span>Doppeltermin</span></label>
         <label class="check-chip"><input id="dringend" type="checkbox"> <span>Dringender Bedarf</span></label>
@@ -5692,6 +5703,9 @@ export function showEditRezeptView({ onLock, homeId, patientId, rezeptId }) {
       ${renderRezeptItemsEditor(items)}
 
       <h3 style="margin-top:20px;">Rezeptprüfung</h3>
+      <div class="checkbox-row">
+        <label class="check-chip"><input id="privat" type="checkbox" ${rezept.privat ? "checked" : ""}> <span>🔒 Privat (keine Prüfung nötig)</span></label>
+      </div>
       <div class="checkbox-row">
         <label class="check-chip"><input id="bg" type="checkbox" ${rezept.bg ? "checked" : ""}> <span>BG</span></label>
         <label class="check-chip"><input id="dt" type="checkbox" ${rezept.dt ? "checked" : ""}> <span>Doppeltermin</span></label>
@@ -5826,6 +5840,7 @@ export function showRezeptDetailView({ onLock, homeId, patientId, rezeptId }) {
         <p><strong>ICD-10 Code:</strong> ${escapeHtml(rezept.icd10 || "—")}</p>
         ${rezept.icd10b ? `<p><strong>2. ICD-10 Code:</strong> ${escapeHtml(rezept.icd10b)}</p>` : ""}
         <p><strong>Leitsymptomatik:</strong> ${escapeHtml(rezept.leitsymptomatik || "—")}</p>
+        <p><strong>Privat:</strong> ${rezept.privat ? "Ja" : "Nein"}</p>
         <p><strong>Hausbesuch:</strong> ${rezept.hausbesuch === "ja" ? "Ja" : rezept.hausbesuch === "nein" ? "Nein" : "—"}</p>
         <p><strong>Arzt-Stempel vorhanden:</strong> ${rezept.arztStempel === "ja" ? "Ja" : rezept.arztStempel === "nein" ? "Nein" : "—"}</p>
         <p><strong>Arzt-Unterschrift vorhanden:</strong> ${rezept.arztUnterschrift === "ja" ? "Ja" : rezept.arztUnterschrift === "nein" ? "Nein" : "—"}</p>
@@ -5841,13 +5856,15 @@ export function showRezeptDetailView({ onLock, homeId, patientId, rezeptId }) {
     <details class="accordion">
       <summary>
         <span>Fristenhinweis</span>
-        <span class="muted">${escapeHtml(frist.statusText || "—")}</span>
+        <span class="muted">${rezept.privat ? "Privatrezept — keine Frist" : escapeHtml(frist.statusText || "—")}</span>
       </summary>
       <div class="accordion-body">
-        <p><strong>Status:</strong> ${escapeHtml(frist.statusText || "—")}</p>
-        <p><strong>Hinweis:</strong> ${escapeHtml(frist.detailsText || "—")}</p>
-        <p><strong>Spätester Beginn:</strong> ${escapeHtml(frist.latestStartText || "—")}</p>
-        <p><strong>Gültig bis:</strong> ${escapeHtml(frist.validUntilText || "—")}</p>
+        ${rezept.privat ? `<p class="muted">Für Privatrezepte gelten keine Kassenfristen.</p>` : `
+          <p><strong>Status:</strong> ${escapeHtml(frist.statusText || "—")}</p>
+          <p><strong>Hinweis:</strong> ${escapeHtml(frist.detailsText || "—")}</p>
+          <p><strong>Spätester Beginn:</strong> ${escapeHtml(frist.latestStartText || "—")}</p>
+          <p><strong>Gültig bis:</strong> ${escapeHtml(frist.validUntilText || "—")}</p>
+        `}
       </div>
     </details>
 

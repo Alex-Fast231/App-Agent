@@ -124,6 +124,7 @@ return {
   hausbesuch: ensureJaNein(source.hausbesuch),
   arztStempel: ensureJaNein(source.arztStempel),
   arztUnterschrift: ensureJaNein(source.arztUnterschrift),
+  privat: ensureBoolean(source.privat, false),
   abgegeben: ensureBoolean(source.abgegeben, false),
   items,
   entries: ensureArray(source.entries).map(normalizeEntry),
