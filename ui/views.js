@@ -17,6 +17,7 @@ import {
   mutateRuntimeData
 } from "../core/app-core.js";
 import { loadEncryptedAppData } from "../storage/secure-store.js";
+import { closeDatabase } from "../storage/indexeddb.js";
 import { logSecurityEvent } from "../security/security-log.js";
 import {
   createHome,
@@ -2180,12 +2181,38 @@ function renderDoctorReportPrintHtml({ settings = {}, patient = {}, rezept = {},
 
 async function wipeAllAppData() {
   clearRuntimeSession();
+  // Eine offene IndexedDB-Verbindung (siehe storage/indexeddb.js) muss vor
+  // dem Löschen der Datenbank geschlossen werden, sonst blockiert der
+  // Browser deleteDatabase() dauerhaft, obwohl kein anderer Tab offen ist.
+  await closeDatabase();
   await new Promise((resolve, reject) => {
     const req = indexedDB.deleteDatabase("fast_doku_db");
     req.onsuccess = () => resolve();
     req.onerror = () => reject(req.error || new Error("Datenbank konnte nicht gelöscht werden."));
     req.onblocked = () => reject(new Error("Datenbank-Löschung ist blockiert. Bitte andere Tabs schließen."));
   });
+}
+
+async function performFullReset(msgEl) {
+  try {
+    await wipeAllAppData();
+    window.location.reload();
+  } catch (err) {
+    console.error(err);
+    if (msgEl) msgEl.textContent = err?.message || "Daten konnten nicht gelöscht werden.";
+  }
+}
+
+// Eigenständiges Passwort (unabhängig von der Geräte-PIN) für den
+// "PIN vergessen? App zurücksetzen"-Weg auf dem Sperrbildschirm - falls ein
+// Therapeut die PIN nicht mehr kennt, kommt er sonst gar nicht mehr in die
+// App hinein (siehe showLoginView). Auf Nutzerwunsch fest auf "1989" gesetzt.
+// Wie beim festen Praxispasswort bewusst nicht im Klartext im Quellcode,
+// nur als Schutz gegen zufälliges Auffinden (z.B. GitHub-Volltextsuche) -
+// keine echte Sicherheitsmaßnahme.
+const FORGOT_PIN_RESET_PASSWORD_ENCODED = "MTk4OQ==";
+function getForgotPinResetPassword() {
+  return atob(FORGOT_PIN_RESET_PASSWORD_ENCODED);
 }
 
 export function bindLockButton(onLock) {
@@ -2412,6 +2439,17 @@ export function showLoginView({ onSuccess }) {
         ${remainingMs > 0 ? `Sperre aktiv. Noch ${Math.ceil(remainingMs / 1000)} Sekunden.` : ""}
       </div>
     </div>
+
+    <div class="card">
+      <button id="forgotPinBtn" class="secondary">PIN vergessen? App zurücksetzen</button>
+      <div id="forgotPinWrap" style="display:none; margin-top:12px;">
+        <p class="muted">Löscht alle auf diesem Gerät gespeicherten Praxisdaten unwiderruflich (bereits heruntergeladene Backup-Dateien auf Ihrem Computer sind davon nicht betroffen). Nur verwenden, wenn die PIN nicht mehr bekannt ist.</p>
+        <label for="resetPasswordInput">Zurücksetzen-Passwort</label>
+        <input id="resetPasswordInput" type="password" autocomplete="off">
+        <button id="confirmForgotPinResetBtn" class="danger" style="margin-top:10px;">Alles löschen und neu starten</button>
+        <div id="forgotPinResetMsg" class="error"></div>
+      </div>
+    </div>
   `);
 
   document.getElementById("loginBtn").onclick = async () => {
@@ -2478,6 +2516,27 @@ export function showLoginView({ onSuccess }) {
 
       msg.textContent = "Login fehlgeschlagen.";
     }
+  };
+
+  document.getElementById("forgotPinBtn").onclick = () => {
+    const wrap = document.getElementById("forgotPinWrap");
+    wrap.style.display = wrap.style.display === "none" ? "block" : "none";
+  };
+
+  document.getElementById("confirmForgotPinResetBtn").onclick = async () => {
+    const resetMsg = document.getElementById("forgotPinResetMsg");
+    resetMsg.textContent = "";
+
+    const enteredPassword = document.getElementById("resetPasswordInput").value;
+    if (enteredPassword !== getForgotPinResetPassword()) {
+      resetMsg.textContent = "Falsches Passwort.";
+      return;
+    }
+
+    const confirmed = window.confirm("Wirklich ALLE auf diesem Gerät gespeicherten Praxisdaten unwiderruflich löschen? Dieser Vorgang kann nicht rückgängig gemacht werden.");
+    if (!confirmed) return;
+
+    await performFullReset(resetMsg);
   };
 }
 
@@ -2966,13 +3025,7 @@ export function showDashboardView({ onLock, keepOverviewOpen = false } = {}) {
     const confirmed = window.confirm("Wirklich alle Daten löschen? Dieser Vorgang kann nicht rückgängig gemacht werden.");
     if (!confirmed) return;
 
-    try {
-      await wipeAllAppData();
-      window.location.reload();
-    } catch (err) {
-      console.error(err);
-      msg.textContent = err?.message || "Daten konnten nicht gelöscht werden.";
-    }
+    await performFullReset(msg);
   };
 
   document.querySelectorAll(".klaereZuzahlungBtn").forEach((btn) => {
@@ -4284,7 +4337,7 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
       </div>
     `);
 
-    document.getElementById("assessmentJetztBtn").onclick = () => stepEbene0();
+    document.getElementById("assessmentJetztBtn").onclick = () => stepBereichAuswahl();
     document.getElementById("assessmentSpaeterBtn").onclick = () => renderSpaeter();
     document.getElementById("assessmentAbbrechenBtn").onclick = () => weiter();
     if (hasExisting) {
@@ -4336,6 +4389,14 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
     schwerst: { mrc: { gruppen: {}, spastik: "" }, kontrakturen: { vorhanden: false, liste: [] }, dekubitusrisiko: "", romPassiv: [], schmerzBeiBewegung: false, spastikWiderstand: false }
   };
   let reviewBackStep = null;
+  // Auf Nutzerwunsch: statt immer die komplette Ebene-0/Barthel/Schmerz/TUG-
+  // Vorlaufstrecke zu durchlaufen, kann bei bereits bekannter Diagnose auch
+  // direkt in einen Bereich (orthopädisch/neurologisch/schwerstbetroffen)
+  // gesprungen werden - siehe stepBereichAuswahl(). Dieses Flag merkt sich,
+  // ob dieser Direktweg genutzt wurde, damit "Zurück" aus dem gewählten
+  // Bereich wieder zur Bereichsauswahl statt zum (dann leeren) Weichenscreen
+  // führt.
+  let usedBranchShortcut = false;
 
   function wizardCard(title, bodyHtml, infoKey = null) {
     const info = infoKey ? AssessmentInfo.TEST_INFO[infoKey] : null;
@@ -4366,6 +4427,37 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
         ${bodyHtml}
       </div>
     `);
+  }
+
+  // Direkteinstieg: statt immer Ebene 0/Barthel/Schmerz/TUG zu durchlaufen,
+  // kann bei bereits bekannter Diagnose auch sofort in einen Bereich
+  // gesprungen werden (auf Nutzerwunsch ergänzt).
+  function stepBereichAuswahl() {
+    wizardCard("Wie möchten Sie starten?", `
+      <button type="button" id="stepFullFlowBtn" style="margin-bottom:16px;">Vollständige Erfassung (empfohlen)</button>
+      <p class="muted" style="margin-top:0;">Oder bei bereits bekannter Diagnose direkt in einen Bereich springen:</p>
+      <div class="list-stack">
+        ${Assessment.WEICHEN_OPTIONEN.map((opt) => `
+          <button type="button" class="secondary bereichDirektBtn" data-val="${opt.val}" style="text-align:left;">${escapeHtml(opt.label)}</button>
+        `).join("")}
+      </div>
+      <button id="wizardBack" class="secondary" style="margin-top:16px;">Zurück</button>
+    `);
+
+    document.getElementById("wizardBack").onclick = () => renderFrage();
+    document.getElementById("stepFullFlowBtn").onclick = () => {
+      usedBranchShortcut = false;
+      stepEbene0();
+    };
+    document.querySelectorAll(".bereichDirektBtn").forEach((btn) => {
+      btn.onclick = () => {
+        usedBranchShortcut = true;
+        wizard.weiche = btn.dataset.val;
+        if (wizard.weiche === "neurologisch") stepBbs7();
+        else if (wizard.weiche === "orthopaedisch") stepSppb();
+        else stepMrcSchwerst();
+      };
+    });
   }
 
   function stepEbene0() {
@@ -4590,7 +4682,7 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
       });
     });
 
-    document.getElementById("wizardBack").onclick = () => stepWeichenscreen();
+    document.getElementById("wizardBack").onclick = () => (usedBranchShortcut ? stepBereichAuswahl() : stepWeichenscreen());
     document.getElementById("wizardNext").onclick = () => {
       const msg = document.getElementById("wizardMsg");
       const result = {};
@@ -4737,7 +4829,7 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
     `, "sppb");
     bindCheckChipToggles(app);
 
-    document.getElementById("wizardBack").onclick = () => stepWeichenscreen();
+    document.getElementById("wizardBack").onclick = () => (usedBranchShortcut ? stepBereichAuswahl() : stepWeichenscreen());
     document.getElementById("wizardNext").onclick = () => {
       wizard.ortho.sppb = {
         balance: {
@@ -4866,7 +4958,7 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
     `, "mrc");
     bindCheckChipToggles(app);
 
-    document.getElementById("wizardBack").onclick = () => (wizard.tug.nichtDurchfuehrbar ? stepTug() : stepWeichenscreen());
+    document.getElementById("wizardBack").onclick = () => (usedBranchShortcut ? stepBereichAuswahl() : (wizard.tug.nichtDurchfuehrbar ? stepTug() : stepWeichenscreen()));
     document.getElementById("wizardNext").onclick = () => {
       const gruppen = {};
       Assessment.MRC_GRUPPEN.forEach((g) => {
@@ -5103,6 +5195,21 @@ export function showPatientDetailView({ onLock, homeId, patientId }) {
   const rezepte = rezepteSorted.filter((rezept) => rezept.abgegeben !== true);
   const abgegebeneRezepte = rezepteSorted.filter((rezept) => rezept.abgegeben === true);
 
+  // Doku-Übernahme: da sich die Therapie oft wiederholt, soll ein bereits
+  // geschriebener SchnellDoku-Text mit einem Klick auch für einen späteren
+  // Tag übernommen werden können, statt ihn jedes Mal neu zu tippen - flacht
+  // dafür die Dokumentationseinträge aller Rezepte des Patienten zu einer
+  // chronologischen Liste ab (neuester zuerst).
+  const todayDe = formatCurrentDateShort();
+  const allDokuEntries = (patient.rezepte || []).flatMap((rezept) =>
+    (rezept.entries || []).map((entry) => ({
+      ...entry,
+      rezeptId: rezept.rezeptId,
+      rezeptLabel: rezeptSummary(rezept),
+      rezeptAbgegeben: rezept.abgegeben === true
+    }))
+  ).sort((a, b) => compareDeDates(b.date, a.date) || String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+
   render(`
     <div class="card">
       <h2>${escapeHtml(formatPatientName(patient) || "Patient")}</h2>
@@ -5143,6 +5250,30 @@ export function showPatientDetailView({ onLock, homeId, patientId }) {
         }).join("")}
       </div>
     </div>
+
+    <details class="accordion" style="margin-top:12px;">
+      <summary>
+        <span>Doku</span>
+        <span class="muted">${allDokuEntries.length}</span>
+      </summary>
+      <div class="accordion-body">
+        ${allDokuEntries.length === 0 ? `<p class="muted">Noch keine Dokumentationseinträge vorhanden.</p>` : `
+          <div class="list-stack">
+            ${allDokuEntries.map((entry) => `
+              <div class="compact-card" style="margin:0;">
+                <div style="font-weight:700; margin-bottom:4px;">${escapeHtml(entry.date || "—")}</div>
+                <div class="compact-meta" style="margin-bottom:8px;">${escapeHtml(entry.rezeptLabel || "—")}${entry.rezeptAbgegeben ? " · abgegeben" : ""}</div>
+                <div style="white-space:pre-wrap;">${escapeHtml(entry.text || "—")}</div>
+                ${entry.date === todayDe || entry.rezeptAbgegeben
+                  ? `<div class="compact-meta" style="margin-top:10px;">${entry.date === todayDe ? "Bereits von heute." : "Rezept ist abgegeben."}</div>`
+                  : `<button class="dokuUebernehmenBtn secondary" data-rezept-id="${escapeHtml(entry.rezeptId)}" data-entry-id="${escapeHtml(entry.entryId)}" style="margin-top:10px; width:100%;">Für heute übernehmen</button>`
+                }
+              </div>
+            `).join("")}
+          </div>
+        `}
+      </div>
+    </details>
 
     <details class="accordion" style="margin-top:12px;">
       <summary>
@@ -5250,6 +5381,22 @@ export function showPatientDetailView({ onLock, homeId, patientId }) {
         patientId,
         rezeptId: btn.dataset.rezeptId
       });
+    };
+  });
+
+  document.querySelectorAll(".dokuUebernehmenBtn").forEach((btn) => {
+    btn.onclick = async () => {
+      const sourceEntry = allDokuEntries.find((e) => e.entryId === btn.dataset.entryId && e.rezeptId === btn.dataset.rezeptId);
+      if (!sourceEntry) return;
+
+      try {
+        createRezeptEntry(homeId, patientId, btn.dataset.rezeptId, { date: formatCurrentDateShort(), text: sourceEntry.text });
+        await queuePersistRuntimeData();
+        showPatientDetailView({ onLock, homeId, patientId });
+      } catch (err) {
+        console.error(err);
+        alert(err?.message || "Eintrag konnte nicht übernommen werden.");
+      }
     };
   });
 }
@@ -8234,7 +8381,7 @@ export function showZeiterfassungView({ onLock, selectedHomeId = null, selectedP
     `);
 
     document.querySelectorAll(".zeit-patient-btn").forEach(el => {
-      el.onclick = () => showZeiterfassungView({ onLock, selectedHomeId, selectedPatientId: el.dataset.patientId });
+      el.onclick = () => showZeiterfassungView({ onLock, selectedHomeId, selectedPatientId: el.dataset.patientId, scrollTo: window.scrollY });
     });
     document.getElementById("zeitBackHomeBtn").onclick = () => {
       setCurrentView("zeiterfassung", { selectedHomeId: null, selectedPatientId: null, selectedRezeptId: null });
@@ -8266,14 +8413,14 @@ export function showZeiterfassungView({ onLock, selectedHomeId = null, selectedP
       `);
       document.getElementById("zeitBackPatientBtn").onclick = () => {
         setCurrentView("zeiterfassung", { selectedHomeId, selectedPatientId: null, selectedRezeptId: null });
-        showZeiterfassungView({ onLock, selectedHomeId });
+        showZeiterfassungView({ onLock, selectedHomeId, scrollTo });
       };
       return;
     }
 
     if (aktiveRezepte.length === 1) {
       setCurrentView("zeiterfassung", { selectedHomeId, selectedPatientId, selectedRezeptId: null });
-      return showZeiterfassungView({ onLock, selectedHomeId, selectedPatientId, selectedRezeptId: aktiveRezepte[0].rezeptId });
+      return showZeiterfassungView({ onLock, selectedHomeId, selectedPatientId, selectedRezeptId: aktiveRezepte[0].rezeptId, scrollTo });
     }
 
     // Mehrere Rezepte – Auswahl anzeigen
@@ -8302,11 +8449,11 @@ export function showZeiterfassungView({ onLock, selectedHomeId = null, selectedP
     `);
 
     document.querySelectorAll(".zeit-rezept-btn").forEach(el => {
-      el.onclick = () => showZeiterfassungView({ onLock, selectedHomeId, selectedPatientId, selectedRezeptId: el.dataset.rezeptId });
+      el.onclick = () => showZeiterfassungView({ onLock, selectedHomeId, selectedPatientId, selectedRezeptId: el.dataset.rezeptId, scrollTo });
     });
     document.getElementById("zeitBackPatientBtn").onclick = () => {
       setCurrentView("zeiterfassung", { selectedHomeId, selectedPatientId: null, selectedRezeptId: null });
-      showZeiterfassungView({ onLock, selectedHomeId });
+      showZeiterfassungView({ onLock, selectedHomeId, scrollTo });
     };
     return;
   }
@@ -8347,16 +8494,13 @@ export function showZeiterfassungView({ onLock, selectedHomeId = null, selectedP
   bindCheckChipToggles(app);
 
   const backBtn = document.getElementById("zeitBackRezeptBtn");
-  backBtn.addEventListener("touchend", (e) => {
+  const goBackToPatientList = (e) => {
     e.preventDefault();
     setCurrentView("zeiterfassung", { selectedHomeId, selectedPatientId: null, selectedRezeptId: null });
-    showZeiterfassungView({ onLock, selectedHomeId });
-  });
-  backBtn.addEventListener("click", (e) => {
-    e.preventDefault();
-    setCurrentView("zeiterfassung", { selectedHomeId, selectedPatientId: null, selectedRezeptId: null });
-    showZeiterfassungView({ onLock, selectedHomeId });
-  });
+    showZeiterfassungView({ onLock, selectedHomeId, scrollTo });
+  };
+  backBtn.addEventListener("touchend", goBackToPatientList);
+  backBtn.addEventListener("click", goBackToPatientList);
 
   document.getElementById("zeitBuchenBtn").onclick = async () => {
     const notiz = document.getElementById("zeitNotizInput").value.trim();
@@ -8390,14 +8534,13 @@ export function showZeiterfassungView({ onLock, selectedHomeId = null, selectedP
           createdAt: new Date().toISOString()
         });
       });
-      const scrollPosition = window.scrollY;
       await queuePersistRuntimeData();
 
       showZeiterfassungView({
         onLock,
         selectedHomeId,
         successMsg: `✓ ${minutes} Min für ${patientName} am ${normalizedDatum} gebucht`,
-        scrollTo: scrollPosition
+        scrollTo
       });
     } catch (err) {
       msg.textContent = "Fehler beim Speichern: " + err.message;
