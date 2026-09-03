@@ -1493,10 +1493,10 @@ export function buildNachbestellLetterData(data, rows) {
     praxis: {
       name: 'Physio Strobl',
       department: 'Abteilung FaSt',
-      address: String(settings.practiceAddress || '').trim(),
-      phone: String(settings.practicePhone || '').trim(),
-      fax: String(settings.therapistFax || '').trim(),
-      therapistName: String(settings.therapistName || '').trim()
+      address: String(data?.settings?.practiceAddress || '').trim(),
+      phone: String(data?.settings?.practicePhone || '').trim(),
+      fax: String(data?.settings?.therapistFax || '').trim(),
+      therapistName: String(data?.settings?.therapistName || '').trim()
     },
     groups: normalizedGroups,
     patientCount,

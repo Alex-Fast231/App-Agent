@@ -6677,13 +6677,18 @@ export function showNachbestellungView({ onLock, doctorFilter = "", textFilter =
     });
   });
 
-  document.getElementById("createNachbestellLetterBtn").onclick = async () => {
+  document.getElementById("createNachbestellLetterBtn").onclick = () => {
     const msg = document.getElementById("nachbestellMsg");
     msg.className = "error";
     msg.textContent = "";
 
     try {
       const { letterData, bodyHtml, lines } = buildCurrentLetter();
+      // openLetterPreview() (window.open) muss synchron direkt im Klick-Handler
+      // aufgerufen werden - ein await davor (z.B. für das Speichern) lässt den
+      // Browser die Nutzeraktion "verlieren" und blockiert das Popup lautlos,
+      // vor allem als installierte PWA auf Android.
+      openLetterPreview(letterData.title, bodyHtml);
       saveNachbestellHistorySnapshot({
         title: `Nachbestellung ${letterData.doctor} · ${formatIsoDateShort(letterData.createdAt)}`,
         doctor: letterData.doctor,
@@ -6693,13 +6698,13 @@ export function showNachbestellungView({ onLock, doctorFilter = "", textFilter =
         snapshotHtml: bodyHtml,
         lines
       });
-      await queuePersistRuntimeData();
-      openLetterPreview(letterData.title, bodyHtml);
-      showNachbestellungView({
-        onLock,
-        doctorFilter: "",
-        textFilter: "",
-        selectedIds: []
+      queuePersistRuntimeData().then(() => {
+        showNachbestellungView({
+          onLock,
+          doctorFilter: "",
+          textFilter: "",
+          selectedIds: []
+        });
       });
     } catch (err) {
       console.error(err);
