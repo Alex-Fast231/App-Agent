@@ -402,17 +402,25 @@ export function resolveDiagnoseInput(input) {
   return { icd10: normalisiereICD(raw), eingabe: raw, quelle: "freitext-unbekannt" };
 }
 
-// Kernlogik: aus einer Liste ICD-10-Codes + Zertifikatsprofil die optimale Verordnung ermitteln.
+// Kernlogik: aus einer Liste ICD-10-Codes (oder {icd10, eingabe, quelle}-Objekten,
+// siehe optimiereVerordnung) + Zertifikatsprofil die optimale Verordnung ermitteln.
+// eingabe/quelle werden direkt an jedes Ergebnis gehängt, BEVOR sortiert wird -
+// so bleibt die Zuordnung zum Originaltext auch nach dem Sortieren nach 'rang'
+// korrekt (vorher wurden eingabe/quelle erst danach rein positionsbasiert
+// zugeordnet, was bei einer Umsortierung zu vertauschten Diagnosetexten führte).
 export function berechneOptimum(icdCodes, zertifikate) {
   const profil = zertifikate || {};
   const ergebnisse = [];
 
-  for (const rawCode of icdCodes || []) {
-    const code = normalisiereICD(rawCode);
+  for (const rawEntry of icdCodes || []) {
+    const entry = typeof rawEntry === "string" ? { icd10: rawEntry } : (rawEntry || {});
+    const code = normalisiereICD(entry.icd10);
+    const eingabe = entry.eingabe || code;
+    const quelle = entry.quelle || "icd10";
     const regel = findeRegelFuerICD(code);
 
     if (!regel) {
-      ergebnisse.push({ icd: code, unbekannt: true });
+      ergebnisse.push({ icd: code, eingabe, quelle, unbekannt: true });
       continue;
     }
 
@@ -429,6 +437,8 @@ export function berechneOptimum(icdCodes, zertifikate) {
 
     ergebnisse.push({
       icd: code,
+      eingabe,
+      quelle,
       diagnose: regel.diagnose,
       gruppe,
       gruppeLabel: katalog.label,
@@ -455,14 +465,7 @@ export function berechneOptimum(icdCodes, zertifikate) {
 // löst sie auf und berechnet die Empfehlung je Eingabe.
 export function optimiereVerordnung(diagnoseInputs, zertifikate) {
   const resolved = (diagnoseInputs || []).map(resolveDiagnoseInput).filter(Boolean);
-  const codes = resolved.map((r) => r.icd10);
-  const ergebnisse = berechneOptimum(codes, zertifikate);
-
-  return ergebnisse.map((ergebnis, idx) => ({
-    ...ergebnis,
-    eingabe: resolved[idx]?.eingabe || ergebnis.icd,
-    quelle: resolved[idx]?.quelle || "icd10"
-  }));
+  return berechneOptimum(resolved, zertifikate);
 }
 
 export function getDefaultLeitsymptomatik(gruppe) {

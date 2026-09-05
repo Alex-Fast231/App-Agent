@@ -1449,7 +1449,7 @@ function extractAssessmentScores(assessment) {
   if (a.weiche === "neurologisch") {
     const bbs = Assessment.computeBbs7(a.neuro?.bbs7);
     if (bbs.maxPossible > 0) {
-      scores.push({ key: "bbs7", label: "BBS-7", value: bbs.total, max: Assessment.BBS7_MAX, direction: "high", classify: () => Assessment.classifyBbs7(bbs.total) });
+      scores.push({ key: "bbs7", label: "BBS-7", value: bbs.total, max: bbs.maxPossible, direction: "high", classify: () => Assessment.classifyBbs7(bbs.total, bbs.maxPossible) });
     }
     const rmiAnswered = (a.neuro?.rmi?.antworten || []).length > 0;
     if (rmiAnswered) {
@@ -1866,7 +1866,12 @@ function flattenNachbestellLines(letterData = {}) {
   );
 }
 
-function renderNachbestellLetterHtml(letterData = {}) {
+// versandart steuert, wie die Verordnungen laut Brieftext zur Praxis kommen
+// sollen - "fax" (Standard: Fax an den Arzt, Original zur Einrichtung),
+// "abholen" (Therapeut holt die Rezepte selbst in der Praxis ab, braucht ein
+// Abholdatum) oder "post" (Original per Post direkt an die Praxisadresse,
+// nicht an die Einrichtung).
+function renderNachbestellLetterHtml(letterData = {}, { versandart = "fax", abholDatum = "" } = {}) {
   const createdAt = formatIsoDateShort(letterData.createdAt);
   const praxis = letterData.praxis || {};
   const doctor = letterData.doctor || "";
@@ -1878,6 +1883,29 @@ function renderNachbestellLetterHtml(letterData = {}) {
     praxis.phone ? `Tel.: ${praxis.phone}` : "",
     praxis.fax ? `Fax.: ${praxis.fax}` : ""
   ]);
+
+  const praxisAdresseZeilen = buildCleanLetterHeaderLines([praxis.name, praxis.address]).map(escapeHtml).join("<br>");
+  const versandTextByArt = {
+    fax: `
+      für unsere gemeinsamen Patientinnen und Patienten bitten wir Sie, folgende Heilmittelverordnungen für Physiotherapie auszustellen und diese per Fax an folgende Nummer zu senden:<br>
+      Fax: ${escapeHtml(praxis.fax || '—')}<br>
+      Bitte lassen Sie die Originale der Verordnungen anschließend der jeweils unten angegebenen Einrichtung zukommen.<br>
+      Vielen Dank für Ihre Unterstützung.
+    `,
+    abholen: `
+      für unsere gemeinsamen Patientinnen und Patienten bitten wir Sie, folgende Heilmittelverordnungen für Physiotherapie auszustellen.<br>
+      Ich werde die Verordnungen persönlich am ${escapeHtml(abholDatum || '—')} in Ihrer Praxis abholen.<br>
+      Vielen Dank für das Herrichten der Verordnungen.
+    `,
+    post: `
+      für unsere gemeinsamen Patientinnen und Patienten bitten wir Sie, folgende Heilmittelverordnungen für Physiotherapie auszustellen und diese per Fax an folgende Nummer zu senden:<br>
+      Fax: ${escapeHtml(praxis.fax || '—')}<br>
+      Bitte senden Sie die Originale der Verordnungen anschließend per Post an unsere Praxisadresse:<br>
+      ${praxisAdresseZeilen}<br>
+      Vielen Dank für Ihre Unterstützung.
+    `
+  };
+  const versandText = versandTextByArt[versandart] || versandTextByArt.fax;
 
   return `
     <style>
@@ -1913,10 +1941,7 @@ function renderNachbestellLetterHtml(letterData = {}) {
       <div class="letter-text">
         Sehr geehrte Damen und Herren,<br>
         liebes Praxis-Team,<br><br>
-        für unsere gemeinsamen Patientinnen und Patienten bitten wir Sie, folgende Heilmittelverordnungen für Physiotherapie auszustellen und diese per Fax an folgende Nummer zu senden:<br>
-        Fax: ${escapeHtml(praxis.fax || '—')}<br>
-        Bitte senden Sie die Originale der Verordnungen anschließend per Post an die jeweils unten angegebene Einrichtung.<br>
-        Vielen Dank für Ihre Unterstützung.
+        ${versandText}
       </div>
 
       ${(letterData.groups || []).map((group) => `
@@ -2986,6 +3011,7 @@ export function showDashboardView({ onLock, keepOverviewOpen = false } = {}) {
 
       const result = await exportBackup(getRuntimeData());
       downloadBlob(result.blob, result.filename);
+      await markBackupReminderHandled(`Backup "${result.filename}" manuell im Dashboard exportiert.`);
       msg.className = "success";
       msg.textContent = `Backup exportiert: ${result.filename}`;
     } catch (err) {
@@ -3328,14 +3354,17 @@ export function showPatientenListeView({ onLock, searchText = "" } = {}) {
     showPatientenListeView({ onLock, searchText: "" });
   };
 
+  // returnTo sorgt dafür, dass "Zurück" aus dem Patienten/Rezept-Bereich
+  // wieder hier auf der Patientenliste landet statt über die Einrichtung
+  // und die Einrichtungsliste zum Dashboard durchgereicht zu werden.
   document.querySelectorAll(".openPatientFromListeBtn").forEach((btn) => {
     btn.onclick = () => {
-      showPatientDetailView({ onLock, homeId: btn.dataset.homeId, patientId: btn.dataset.patientId });
+      showPatientDetailView({ onLock, homeId: btn.dataset.homeId, patientId: btn.dataset.patientId, returnTo: { from: "patienten-liste", searchText } });
     };
   });
   document.querySelectorAll(".openOptimierungFromListeBtn").forEach((btn) => {
     btn.onclick = () => {
-      showRezeptoptimierungView({ onLock, homeId: btn.dataset.homeId, patientId: btn.dataset.patientId });
+      showRezeptoptimierungView({ onLock, homeId: btn.dataset.homeId, patientId: btn.dataset.patientId, returnTo: { from: "patienten-liste", searchText } });
     };
   });
 
@@ -4816,6 +4845,7 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
       <input id="sppbGeh" type="number" min="0" step="0.1" value="${wizard.ortho.sppb.gehgeschwindigkeitSek ?? ""}">
       <label for="sppbGehHilfsmittel">Hilfsmittel</label>
       <input id="sppbGehHilfsmittel" type="text" value="${escapeHtml(wizard.ortho.sppb.hilfsmittel || "")}">
+      <label class="check-chip" style="justify-content:flex-start; margin-top:10px;"><input type="checkbox" id="sppbGehNd" ${wizard.ortho.sppb.gehgeschwindigkeitNichtMoeglich ? "checked" : ""}> <span>Nicht möglich</span></label>
 
       <h3 style="margin-top:18px;">Chair Stand Test (5x aufstehen)</h3>
       <label for="sppbChair">Zeit (Sekunden)</label>
@@ -4839,6 +4869,7 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
           nichtMoeglich: document.getElementById("sppbBalanceNd").checked
         },
         gehgeschwindigkeitSek: document.getElementById("sppbGeh").value.trim() || null,
+        gehgeschwindigkeitNichtMoeglich: document.getElementById("sppbGehNd").checked,
         hilfsmittel: document.getElementById("sppbGehHilfsmittel").value.trim(),
         chairStandSek: document.getElementById("sppbChair").value.trim() || null,
         chairStandNichtMoeglich: document.getElementById("sppbChairNd").checked
@@ -5085,7 +5116,7 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
       const rmiTotal = Assessment.computeRmiTotal(wizard.neuro.rmi.antworten, wizard.neuro.rmi.beobachtung);
       const mrc = Assessment.computeMrcTotal(wizard.neuro.mrc.gruppen);
       ebeneSummary = `
-        <p><strong>BBS-7:</strong> ${bbs.total}/${bbs.maxPossible} – ${escapeHtml(Assessment.classifyBbs7(bbs.total))}${bbs.notDurchfuehrbar ? ` (${bbs.notDurchfuehrbar} Item(s) nicht durchführbar)` : ""}</p>
+        <p><strong>BBS-7:</strong> ${bbs.total}/${bbs.maxPossible} – ${escapeHtml(Assessment.classifyBbs7(bbs.total, bbs.maxPossible))}${bbs.notDurchfuehrbar ? ` (${bbs.notDurchfuehrbar} Item(s) nicht durchführbar)` : ""}</p>
         <p><strong>RMI:</strong> ${rmiTotal}/${Assessment.RMI_MAX} – ${escapeHtml(Assessment.classifyRmi(rmiTotal))}</p>
         <p><strong>MRC gesamt:</strong> ${mrc.total}/${mrc.max} (${mrc.count} bewertete Werte)</p>
       `;
@@ -5178,16 +5209,30 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
   renderFrage();
 }
 
-export function showPatientDetailView({ onLock, homeId, patientId }) {
+// Patient-/Rezept-Detailseiten sind auf zwei Wegen erreichbar: über die
+// Einrichtung (Heim -> Patient) oder direkt über die Dashboard-weite
+// Patientenliste (Patient ohne Umweg über sein Heim). returnTo trägt fest,
+// welcher der beiden Wege es war, damit "Zurück" den Nutzer dahin
+// zurückbringt, wo er wirklich herkam, statt ihn immer über das Heim und
+// die Einrichtungsliste zum Dashboard durchzureichen.
+function goBackFromPatient({ onLock, homeId, returnTo }) {
+  if (returnTo?.from === "patienten-liste") {
+    showPatientenListeView({ onLock, searchText: returnTo.searchText || "" });
+  } else {
+    showHomeDetailView({ onLock, homeId });
+  }
+}
+
+export function showPatientDetailView({ onLock, homeId, patientId, returnTo = null }) {
   bindLockButton(onLock);
-  setCurrentView("patient-detail", { homeId, patientId });
+  setCurrentView("patient-detail", { homeId, patientId, returnTo });
 
   const runtimeData = getRuntimeData();
   const home = getHomeById(runtimeData, homeId);
   const patient = getPatientById(home, patientId);
 
   if (!home || !patient) {
-    showHomeDetailView({ onLock, homeId });
+    goBackFromPatient({ onLock, homeId, returnTo });
     return;
   }
 
@@ -5214,7 +5259,7 @@ export function showPatientDetailView({ onLock, homeId, patientId }) {
     <div class="card">
       <h2>${escapeHtml(formatPatientName(patient) || "Patient")}</h2>
       <p class="muted">Heim: ${escapeHtml(home.name || "—")}</p>
-      <button id="backHomeDetailBtn" class="secondary">Zurück zum Heim</button>
+      <button id="backHomeDetailBtn" class="secondary">${returnTo?.from === "patienten-liste" ? "Zurück zu Patienten" : "Zurück zum Heim"}</button>
     </div>
 
     <div class="card">
@@ -5340,11 +5385,11 @@ export function showPatientDetailView({ onLock, homeId, patientId }) {
   `);
 
   document.getElementById("backHomeDetailBtn").onclick = () => {
-    showHomeDetailView({ onLock, homeId });
+    goBackFromPatient({ onLock, homeId, returnTo });
   };
 
   document.getElementById("openCreateRezeptBtn").onclick = () => {
-    showCreateRezeptView({ onLock, homeId, patientId });
+    showCreateRezeptView({ onLock, homeId, patientId, returnTo });
   };
 
   document.getElementById("deletePatientBtn").onclick = async () => {
@@ -5355,7 +5400,7 @@ export function showPatientDetailView({ onLock, homeId, patientId }) {
     try {
       deletePatient(homeId, patientId);
       await queuePersistRuntimeData();
-      showHomeDetailView({ onLock, homeId });
+      goBackFromPatient({ onLock, homeId, returnTo });
     } catch (err) {
       console.error(err);
       alert(err?.message || "Patient konnte nicht gelöscht werden.");
@@ -5368,7 +5413,8 @@ export function showPatientDetailView({ onLock, homeId, patientId }) {
         onLock,
         homeId,
         patientId,
-        rezeptId: btn.dataset.rezeptId
+        rezeptId: btn.dataset.rezeptId,
+        returnTo
       });
     };
   });
@@ -5379,7 +5425,8 @@ export function showPatientDetailView({ onLock, homeId, patientId }) {
         onLock,
         homeId,
         patientId,
-        rezeptId: btn.dataset.rezeptId
+        rezeptId: btn.dataset.rezeptId,
+        returnTo
       });
     };
   });
@@ -5392,7 +5439,7 @@ export function showPatientDetailView({ onLock, homeId, patientId }) {
       try {
         createRezeptEntry(homeId, patientId, btn.dataset.rezeptId, { date: formatCurrentDateShort(), text: sourceEntry.text });
         await queuePersistRuntimeData();
-        showPatientDetailView({ onLock, homeId, patientId });
+        showPatientDetailView({ onLock, homeId, patientId, returnTo });
       } catch (err) {
         console.error(err);
         alert(err?.message || "Eintrag konnte nicht übernommen werden.");
@@ -5421,16 +5468,16 @@ function renderOptimierungErgebnisCard(ergebnis, { primary = false } = {}) {
   `;
 }
 
-export function showRezeptoptimierungView({ onLock, homeId, patientId }) {
+export function showRezeptoptimierungView({ onLock, homeId, patientId, returnTo = null }) {
   bindLockButton(onLock);
-  setCurrentView("rezept-optimierung", { homeId, patientId });
+  setCurrentView("rezept-optimierung", { homeId, patientId, returnTo });
 
   const runtimeData = getRuntimeData();
   const home = getHomeById(runtimeData, homeId);
   const patient = getPatientById(home, patientId);
 
   if (!home || !patient) {
-    showHomeDetailView({ onLock, homeId });
+    goBackFromPatient({ onLock, homeId, returnTo });
     return;
   }
 
@@ -5542,6 +5589,7 @@ export function showRezeptoptimierungView({ onLock, homeId, patientId }) {
             onLock,
             homeId,
             patientId,
+            returnTo,
             prefill: {
               icd10,
               leitsymptomatik: getDefaultLeitsymptomatik(gruppe),
@@ -5656,7 +5704,7 @@ export function showRezeptoptimierungView({ onLock, homeId, patientId }) {
   `);
 
   document.getElementById("backPatientBtn").onclick = () => {
-    showPatientDetailView({ onLock, homeId, patientId });
+    showPatientDetailView({ onLock, homeId, patientId, returnTo });
   };
 
   document.querySelectorAll(".reuseZuordnungBtn").forEach((btn) => {
@@ -5694,9 +5742,9 @@ export function showRezeptoptimierungView({ onLock, homeId, patientId }) {
   document.getElementById("findOptimumBtn").onclick = runOptimierung;
 }
 
-export function showCreateRezeptView({ onLock, homeId, patientId, prefill = null }) {
+export function showCreateRezeptView({ onLock, homeId, patientId, prefill = null, returnTo = null }) {
   bindLockButton(onLock);
-  setCurrentView("rezept-create", { homeId, patientId });
+  setCurrentView("rezept-create", { homeId, patientId, returnTo });
 
   const prefillItems = prefill?.itemType ? [{ type: prefill.itemType, count: prefill.count || "" }] : [];
 
@@ -5757,7 +5805,7 @@ export function showCreateRezeptView({ onLock, homeId, patientId, prefill = null
   `);
 
   document.getElementById("backPatientBtn").onclick = () => {
-    showPatientDetailView({ onLock, homeId, patientId });
+    showPatientDetailView({ onLock, homeId, patientId, returnTo });
   };
 
   bindDateAutoFormat(document.getElementById("ausstell"));
@@ -5794,7 +5842,7 @@ export function showCreateRezeptView({ onLock, homeId, patientId, prefill = null
       }
 
       await queuePersistRuntimeData();
-      showPatientDetailView({ onLock, homeId, patientId });
+      showPatientDetailView({ onLock, homeId, patientId, returnTo });
     } catch (err) {
       console.error(err);
       msg.textContent = "Rezept konnte nicht gespeichert werden.";
@@ -5802,9 +5850,9 @@ export function showCreateRezeptView({ onLock, homeId, patientId, prefill = null
   };
 }
 
-export function showEditRezeptView({ onLock, homeId, patientId, rezeptId }) {
+export function showEditRezeptView({ onLock, homeId, patientId, rezeptId, returnTo = null }) {
   bindLockButton(onLock);
-  setCurrentView("rezept-edit", { homeId, patientId, rezeptId });
+  setCurrentView("rezept-edit", { homeId, patientId, rezeptId, returnTo });
 
   const runtimeData = getRuntimeData();
   const home = getHomeById(runtimeData, homeId);
@@ -5812,7 +5860,7 @@ export function showEditRezeptView({ onLock, homeId, patientId, rezeptId }) {
   const rezept = getRezeptById(patient, rezeptId);
 
   if (!home || !patient || !rezept) {
-    showPatientDetailView({ onLock, homeId, patientId });
+    showPatientDetailView({ onLock, homeId, patientId, returnTo });
     return;
   }
 
@@ -5877,7 +5925,7 @@ export function showEditRezeptView({ onLock, homeId, patientId, rezeptId }) {
   `);
 
   document.getElementById("backPatientBtn").onclick = () => {
-    showPatientDetailView({ onLock, homeId, patientId });
+    showPatientDetailView({ onLock, homeId, patientId, returnTo });
   };
 
   bindDateAutoFormat(document.getElementById("ausstell"));
@@ -5920,7 +5968,7 @@ export function showEditRezeptView({ onLock, homeId, patientId, rezeptId }) {
       }
 
       await queuePersistRuntimeData();
-      showPatientDetailView({ onLock, homeId, patientId });
+      showPatientDetailView({ onLock, homeId, patientId, returnTo });
     } catch (err) {
       console.error(err);
       msg.textContent = "Rezept konnte nicht aktualisiert werden.";
@@ -5936,7 +5984,7 @@ export function showEditRezeptView({ onLock, homeId, patientId, rezeptId }) {
     try {
       deleteRezept(homeId, patientId, rezeptId);
       await queuePersistRuntimeData();
-      showPatientDetailView({ onLock, homeId, patientId });
+      showPatientDetailView({ onLock, homeId, patientId, returnTo });
     } catch (err) {
       console.error(err);
       alert(err?.message || "Rezept konnte nicht gelöscht werden.");
@@ -5944,9 +5992,9 @@ export function showEditRezeptView({ onLock, homeId, patientId, rezeptId }) {
   };
 }
 
-export function showRezeptDetailView({ onLock, homeId, patientId, rezeptId }) {
+export function showRezeptDetailView({ onLock, homeId, patientId, rezeptId, returnTo = null }) {
   bindLockButton(onLock);
-  setCurrentView("rezept-detail", { homeId, patientId, rezeptId });
+  setCurrentView("rezept-detail", { homeId, patientId, rezeptId, returnTo });
 
   const runtimeData = getRuntimeData();
   const home = getHomeById(runtimeData, homeId);
@@ -5954,7 +6002,7 @@ export function showRezeptDetailView({ onLock, homeId, patientId, rezeptId }) {
   const rezept = getRezeptById(patient, rezeptId);
 
   if (!home || !patient || !rezept) {
-    showPatientDetailView({ onLock, homeId, patientId });
+    showPatientDetailView({ onLock, homeId, patientId, returnTo });
     return;
   }
 
@@ -6065,7 +6113,7 @@ export function showRezeptDetailView({ onLock, homeId, patientId, rezeptId }) {
   `);
 
   document.getElementById("backPatientBtn").onclick = () => {
-    showPatientDetailView({ onLock, homeId, patientId });
+    showPatientDetailView({ onLock, homeId, patientId, returnTo });
   };
 
   const markRezeptAbgegebenBtn = document.getElementById("markRezeptAbgegebenBtn");
@@ -6086,7 +6134,7 @@ export function showRezeptDetailView({ onLock, homeId, patientId, rezeptId }) {
           markRezeptAbgegeben(homeId, patientId, rezeptId);
         }
         await queuePersistRuntimeData();
-        showRezeptDetailView({ onLock, homeId, patientId, rezeptId });
+        showRezeptDetailView({ onLock, homeId, patientId, rezeptId, returnTo });
       } catch (err) {
         console.error(err);
         alert(err?.message || "Rezeptstatus konnte nicht geändert werden.");
@@ -6101,7 +6149,8 @@ export function showRezeptDetailView({ onLock, homeId, patientId, rezeptId }) {
         homeId,
         patientId,
         rezeptId,
-        entryId: btn.dataset.entryId
+        entryId: btn.dataset.entryId,
+        returnTo
       });
     };
   });
@@ -6114,7 +6163,7 @@ export function showRezeptDetailView({ onLock, homeId, patientId, rezeptId }) {
       try {
         deleteRezeptEntry(homeId, patientId, rezeptId, btn.dataset.entryId);
         await queuePersistRuntimeData();
-        showRezeptDetailView({ onLock, homeId, patientId, rezeptId });
+        showRezeptDetailView({ onLock, homeId, patientId, rezeptId, returnTo });
       } catch (err) {
         console.error(err);
         alert(err?.message || "Dokumentationseintrag konnte nicht gelöscht werden.");
@@ -6130,7 +6179,7 @@ export function showRezeptDetailView({ onLock, homeId, patientId, rezeptId }) {
       try {
         deleteRezeptTimeEntry(homeId, patientId, rezeptId, btn.dataset.timeEntryId);
         await queuePersistRuntimeData();
-        showRezeptDetailView({ onLock, homeId, patientId, rezeptId });
+        showRezeptDetailView({ onLock, homeId, patientId, rezeptId, returnTo });
       } catch (err) {
         console.error(err);
         alert(err?.message || "Zeiteintrag konnte nicht gelöscht werden.");
@@ -6139,9 +6188,9 @@ export function showRezeptDetailView({ onLock, homeId, patientId, rezeptId }) {
   });
 }
 
-export function showEditRezeptEntryView({ onLock, homeId, patientId, rezeptId, entryId }) {
+export function showEditRezeptEntryView({ onLock, homeId, patientId, rezeptId, entryId, returnTo = null }) {
   bindLockButton(onLock);
-  setCurrentView("entry-edit", { homeId, patientId, rezeptId, entryId });
+  setCurrentView("entry-edit", { homeId, patientId, rezeptId, entryId, returnTo });
 
   const runtimeData = getRuntimeData();
   const home = getHomeById(runtimeData, homeId);
@@ -6150,7 +6199,7 @@ export function showEditRezeptEntryView({ onLock, homeId, patientId, rezeptId, e
   const entry = (rezept?.entries || []).find((item) => item.entryId === entryId);
 
   if (!home || !patient || !rezept || !entry) {
-    showRezeptDetailView({ onLock, homeId, patientId, rezeptId });
+    showRezeptDetailView({ onLock, homeId, patientId, rezeptId, returnTo });
     return;
   }
 
@@ -6173,7 +6222,7 @@ export function showEditRezeptEntryView({ onLock, homeId, patientId, rezeptId, e
   `);
 
   document.getElementById("backRezeptBtn").onclick = () => {
-    showRezeptDetailView({ onLock, homeId, patientId, rezeptId });
+    showRezeptDetailView({ onLock, homeId, patientId, rezeptId, returnTo });
   };
 
   bindDateAutoFormat(document.getElementById("entryDate"));
@@ -6194,7 +6243,7 @@ export function showEditRezeptEntryView({ onLock, homeId, patientId, rezeptId, e
     try {
       updateRezeptEntry(homeId, patientId, rezeptId, entryId, { date, text });
       await queuePersistRuntimeData();
-      showRezeptDetailView({ onLock, homeId, patientId, rezeptId });
+      showRezeptDetailView({ onLock, homeId, patientId, rezeptId, returnTo });
     } catch (err) {
       console.error(err);
       msg.textContent = "Eintrag konnte nicht aktualisiert werden.";
@@ -6592,6 +6641,19 @@ export function showNachbestellungView({ onLock, doctorFilter = "", textFilter =
         </div>
       `}
 
+      <div class="compact-card" style="margin-top:16px;">
+        <div style="font-weight:600; margin-bottom:8px;">Zustellung</div>
+        ${renderRadioGroup("nachbestellVersandart", [
+          { val: "fax", label: "Per Fax an den Arzt / Original zur Einrichtung" },
+          { val: "abholen", label: "Ich hole die Rezepte selbst ab" },
+          { val: "post", label: "Original per Post an die Praxis" }
+        ], "fax")}
+        <div id="nachbestellAbholDatumWrap" style="display:none; margin-top:8px;">
+          <label for="nachbestellAbholDatum">Abholdatum</label>
+          <input id="nachbestellAbholDatum" type="text" value="${escapeHtml(formatCurrentDateShort())}" placeholder="TT.MM.JJJJ" inputmode="numeric">
+        </div>
+      </div>
+
       <div class="row" style="margin-top:12px;">
         <button id="createNachbestellLetterBtn">Nachbestellzettel erzeugen</button>
         <button id="printNachbestellSelectionBtn" class="secondary">Aktuelle Auswahl drucken</button>
@@ -6631,16 +6693,37 @@ export function showNachbestellungView({ onLock, doctorFilter = "", textFilter =
     return filteredRows.filter((row) => chosenIds.includes(row.rowId));
   }
 
+  function getNachbestellVersandOptions() {
+    const versandart = getRadioValue("nachbestellVersandart") || "fax";
+    if (versandart === "abholen") {
+      const raw = document.getElementById("nachbestellAbholDatum").value.trim();
+      const abholDatum = normalizeDeDateInput(raw) || raw;
+      if (!abholDatum || !parseDeDate(abholDatum)) {
+        throw new Error("Bitte ein gültiges Abholdatum eingeben (TT.MM.JJJJ).");
+      }
+      return { versandart, abholDatum };
+    }
+    return { versandart };
+  }
+
   function buildCurrentLetter() {
     const chosenRows = getChosenRows();
     if (chosenRows.length === 0) throw new Error("Bitte mindestens einen Eintrag auswählen.");
+    const versandOptions = getNachbestellVersandOptions();
     const letterData = buildNachbestellLetterData(getRuntimeData(), chosenRows);
     return {
       letterData,
-      bodyHtml: renderNachbestellLetterHtml(letterData),
+      bodyHtml: renderNachbestellLetterHtml(letterData, versandOptions),
       lines: flattenNachbestellLines(letterData)
     };
   }
+
+  document.querySelectorAll('input[name="nachbestellVersandart"]').forEach((el) => {
+    el.addEventListener("change", () => {
+      const wrap = document.getElementById("nachbestellAbholDatumWrap");
+      wrap.style.display = getRadioValue("nachbestellVersandart") === "abholen" ? "block" : "none";
+    });
+  });
 
   document.getElementById("backDashboardBtn").onclick = () => showDashboardView({ onLock });
 
@@ -6667,6 +6750,7 @@ export function showNachbestellungView({ onLock, doctorFilter = "", textFilter =
   };
 
   bindSelectableCardChecks(app);
+  bindCheckChipToggles(app);
 
   document.querySelectorAll('.nachbestellCheck').forEach((check) => {
     if (check.dataset.boundSelectionState === '1') return;
@@ -7187,7 +7271,8 @@ export function resumeCurrentView({ onLock }) {
     return showPatientDetailView({
       onLock,
       homeId: context.homeId,
-      patientId: context.patientId
+      patientId: context.patientId,
+      returnTo: context.returnTo || null
     });
   }
 
@@ -7195,7 +7280,8 @@ export function resumeCurrentView({ onLock }) {
     return showCreateRezeptView({
       onLock,
       homeId: context.homeId,
-      patientId: context.patientId
+      patientId: context.patientId,
+      returnTo: context.returnTo || null
     });
   }
 
@@ -7204,7 +7290,8 @@ export function resumeCurrentView({ onLock }) {
       onLock,
       homeId: context.homeId,
       patientId: context.patientId,
-      rezeptId: context.rezeptId
+      rezeptId: context.rezeptId,
+      returnTo: context.returnTo || null
     });
   }
 
@@ -7213,7 +7300,8 @@ export function resumeCurrentView({ onLock }) {
       onLock,
       homeId: context.homeId,
       patientId: context.patientId,
-      rezeptId: context.rezeptId
+      rezeptId: context.rezeptId,
+      returnTo: context.returnTo || null
     });
   }
 
@@ -7223,7 +7311,8 @@ export function resumeCurrentView({ onLock }) {
       homeId: context.homeId,
       patientId: context.patientId,
       rezeptId: context.rezeptId,
-      entryId: context.entryId
+      entryId: context.entryId,
+      returnTo: context.returnTo || null
     });
   }
 

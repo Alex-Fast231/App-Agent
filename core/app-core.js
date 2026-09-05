@@ -80,34 +80,48 @@ export async function persistRuntimeData() {
   // gesetzt wird (z.B. durch einen Lock). Der Speichervorgang selbst ist
   // damit sicher und wird nicht abgebrochen.
   const keyForThisWrite = runtimeKey;
+  const dataAtStart = runtimeData;
   const normalized = normalizeAppData(runtimeData);
   const encrypted = await encryptJSON(normalized, keyForThisWrite);
   await saveEncryptedAppData(encrypted);
 
   // Nur dann den entschlüsselten Stand wieder im Speicher ablegen, wenn
-  // die Session währenddessen NICHT gesperrt wurde. Sonst würde ein Lock,
+  // die Session währenddessen NICHT gesperrt wurde (sonst würde ein Lock,
   // der genau während dieses Speichervorgangs passiert, die entschlüsselten
-  // Daten direkt wieder zurück in den Speicher schreiben.
-  if (runtimeKey === keyForThisWrite) {
+  // Daten direkt wieder zurück in den Speicher schreiben) UND wenn
+  // runtimeData sich seit Beginn dieses Aufrufs nicht bereits durch eine
+  // andere, zwischenzeitlich abgelaufene mutateRuntimeData()-Änderung
+  // weiterbewegt hat - sonst würde diese neuere Änderung hier mit dem
+  // veralteten Stand überschrieben und wäre komplett verloren (nicht nur
+  // ungespeichert, sondern auch aus dem Arbeitsspeicher entfernt).
+  if (runtimeKey === keyForThisWrite && runtimeData === dataAtStart) {
     runtimeData = normalized;
   }
 }
 
-export function queuePersistRuntimeData() {
-  if (persistPromise) return persistPromise;
+// Reiht Speicheraufrufe so, dass keine zwischenzeitliche Änderung verloren
+// geht: läuft bereits ein persist(), wird nach dessen Abschluss automatisch
+// ein weiterer Durchlauf angehängt, falls währenddessen erneut mutiert
+// wurde - der zurückgegebene Promise löst sich erst auf, wenn wirklich
+// alle bis dahin angeforderten Änderungen gespeichert sind.
+let persistAgainRequested = false;
 
-  persistPromise = new Promise((resolve, reject) => {
-    queueMicrotask(async () => {
-      try {
+export function queuePersistRuntimeData() {
+  if (persistPromise) {
+    persistAgainRequested = true;
+    return persistPromise;
+  }
+
+  persistPromise = (async () => {
+    try {
+      do {
+        persistAgainRequested = false;
         await persistRuntimeData();
-        resolve();
-      } catch (err) {
-        reject(err);
-      } finally {
-        persistPromise = null;
-      }
-    });
-  });
+      } while (persistAgainRequested);
+    } finally {
+      persistPromise = null;
+    }
+  })();
 
   return persistPromise;
 }

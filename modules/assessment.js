@@ -106,7 +106,7 @@ export const BBS7_ITEMS = [
   { key: "stehenZuSitzen", label: "Vom Stehen zum Sitzen (kontrolliert)" },
   { key: "transfer", label: "Transfer (Stuhl zu Stuhl / Liege seitlich)" },
   { key: "augenGeschlossen", label: "Stehen mit geschlossenen Augen 10 Sek." },
-  { key: "tandemstand", label: "Tandemstand 30 Sek." }
+  { key: "tandemstand", label: "Stehen mit geschlossenen Füßen 30 Sek." }
 ];
 export const BBS7_MAX = 28;
 
@@ -128,9 +128,15 @@ export function computeBbs7(items) {
   return { total, maxPossible, notDurchfuehrbar };
 }
 
-export function classifyBbs7(total) {
-  if (total >= 21) return "Geringes Sturzrisiko";
-  if (total >= 11) return "Mittleres Sturzrisiko";
+// maxPossible fällt kleiner als BBS7_MAX aus, sobald Items als "nicht
+// durchführbar" markiert wurden (z.B. bei Schwerstbetroffenen) - die
+// Schwellenwerte werden deshalb proportional zur tatsächlich erreichbaren
+// Punktzahl skaliert, statt starr gegen die volle 28er-Skala zu prüfen.
+export function classifyBbs7(total, maxPossible = BBS7_MAX) {
+  const max = Number(maxPossible) > 0 ? Number(maxPossible) : BBS7_MAX;
+  const ratio = Number(total) / max;
+  if (ratio >= 21 / BBS7_MAX) return "Geringes Sturzrisiko";
+  if (ratio >= 11 / BBS7_MAX) return "Mittleres Sturzrisiko";
   return "Hohes Sturzrisiko";
 }
 
@@ -208,7 +214,8 @@ export function scoreSppbBalance({ seitNebeneinanderSek, semitandemSek, tandemSe
   return 2;
 }
 
-export function scoreSppbGehgeschwindigkeit(seconds) {
+export function scoreSppbGehgeschwindigkeit(seconds, nichtMoeglich) {
+  if (nichtMoeglich) return 0;
   if (seconds === null || seconds === undefined || seconds === "") return 0;
   const s = Number(seconds);
   if (!Number.isFinite(s) || s <= 0) return 0;
@@ -232,7 +239,7 @@ export const SPPB_MAX = 12;
 
 export function computeSppbTotal(sppb) {
   const balance = scoreSppbBalance(sppb?.balance || {});
-  const gehen = scoreSppbGehgeschwindigkeit(sppb?.gehgeschwindigkeitSek);
+  const gehen = scoreSppbGehgeschwindigkeit(sppb?.gehgeschwindigkeitSek, sppb?.gehgeschwindigkeitNichtMoeglich);
   const chairStand = scoreSppbChairStand(sppb?.chairStandSek, sppb?.chairStandNichtMoeglich);
   return { balance, gehen, chairStand, total: balance + gehen + chairStand };
 }

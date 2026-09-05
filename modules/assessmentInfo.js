@@ -71,7 +71,7 @@ export const TEST_INFO = {
     title: "BBS-7 – Berg Balance Scale (Kurzform)",
     durchfuehrung: [
       "7-Item-Kurzform der ursprünglichen 14-Item Berg Balance Scale, prüft funktionelles Gleichgewicht",
-      "Items: Aufstehen vom Sitzen, freies Stehen 2 Min., freies Sitzen 2 Min., kontrolliertes Hinsetzen, Transfer, Stehen mit geschlossenen Augen 10 Sek., Tandemstand 30 Sek.",
+      "Items: Aufstehen vom Sitzen, freies Stehen 2 Min., freies Sitzen 2 Min., kontrolliertes Hinsetzen, Transfer, Stehen mit geschlossenen Augen 10 Sek., Stehen mit geschlossenen Füßen 30 Sek.",
       "Jedes Item wird mit 0-4 Punkten bewertet (0 = nicht möglich, 4 = sicher/selbstständig)",
       "Aus anderen Gründen nicht durchführbare Items (z.B. Rollstuhlpflichtigkeit) können als „nicht durchführbar“ markiert werden"
     ],
