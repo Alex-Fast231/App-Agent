@@ -400,7 +400,15 @@ function normalizePatient(patient) {
     entries: ensureArray(source.entries).map(normalizeEntry),
     rezepte: ensureArray(source.rezepte).map(normalizeRezept),
     diagnoseZuordnung: ensureArray(source.diagnoseZuordnung).map(normalizeDiagnoseZuordnung),
-    zeitMeta: source.zeitMeta && typeof source.zeitMeta === "object" ? source.zeitMeta : {}
+    zeitMeta: source.zeitMeta && typeof source.zeitMeta === "object" ? source.zeitMeta : {},
+    // Zwischenstand eines noch nicht fertig ausgefüllten Assessment-Wizards
+    // (siehe modules/homes.js saveAssessmentDraft/clearAssessmentDraft) -
+    // überlebt damit einen Auto-Lock oder ein Schließen der App mitten in
+    // der Erfassung, statt alle bereits eingegebenen Werte zu verlieren.
+    // Bewusst ohne Feld-Validierung, da die innere Struktur exakt dem
+    // Wizard-Objekt in ui/views.js entspricht und sich mit den Tests dort
+    // weiterentwickelt.
+    assessmentDraft: source.assessmentDraft && typeof source.assessmentDraft === "object" ? source.assessmentDraft : null
   };
 }
 

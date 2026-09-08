@@ -744,6 +744,34 @@ function addDaysToComparable(comparable, days) {
   return getComparableFromDate(d);
 }
 
+// Zwischenspeichern eines noch nicht abgeschlossenen Assessment-Durchlaufs
+// (auf Nutzerwunsch: ein Auto-Lock mitten in der Erfassung darf nicht mehr
+// alle bereits eingegebenen Werte löschen). draft enthält den kompletten
+// Wizard-Zustand aus ui/views.js sowie den Zeitpunkt der letzten Änderung.
+export function saveAssessmentDraft(homeId, patientId, draft) {
+  mutateRuntimeData((data) => {
+    const home = getHomeById(data, homeId);
+    if (!home) throw new Error("Heim nicht gefunden");
+
+    const patient = getPatientById(home, patientId);
+    if (!patient) throw new Error("Patient nicht gefunden");
+
+    patient.assessmentDraft = draft;
+  });
+}
+
+export function clearAssessmentDraft(homeId, patientId) {
+  mutateRuntimeData((data) => {
+    const home = getHomeById(data, homeId);
+    if (!home) return;
+
+    const patient = getPatientById(home, patientId);
+    if (!patient) return;
+
+    patient.assessmentDraft = null;
+  });
+}
+
 export function scheduleAssessment(homeId, patientId, dueDateComparable) {
   mutateRuntimeData((data) => {
     const home = getHomeById(data, homeId);

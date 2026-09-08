@@ -77,6 +77,8 @@ import {
   saveFreikuvertBestellung,
   scheduleAssessment,
   saveAssessmentResult,
+  saveAssessmentDraft,
+  clearAssessmentDraft,
   getFaelligeAssessmentErinnerungen
 } from "../modules/homes.js";
 import { getRezeptFristInfo } from "../modules/fristen.js";
@@ -1386,7 +1388,7 @@ function getCheckboxListValues(namePrefix) {
   return Array.from(document.querySelectorAll(`.${namePrefix}-check:checked`)).map((el) => el.value);
 }
 
-function renderRomJointRow(joint, current) {
+function renderRomJointRow(joint, current, currentGrad) {
   return `
     <div class="compact-card" style="margin-bottom:8px;">
       <div style="font-weight:600; margin-bottom:6px;">${escapeHtml(joint.label)}</div>
@@ -1399,6 +1401,10 @@ function renderRomJointRow(joint, current) {
           </label>
         `).join("")}
       </div>
+      <div style="margin-top:8px;">
+        <label class="muted" style="font-size:0.85em;">Gradzahl (optional)</label>
+        <input type="number" class="rom-grad-input" data-grad-for="${joint.key}" placeholder="z.B. 90°" value="${currentGrad ?? ""}" style="width:100px;">
+      </div>
     </div>
   `;
 }
@@ -1406,7 +1412,11 @@ function renderRomJointRow(joint, current) {
 function collectRomJointResults(joints, selectedKeys) {
   return joints
     .filter((j) => selectedKeys.includes(j.key))
-    .map((j) => ({ gelenk: j.key, bewertung: getRadioValue(`rom-${j.key}`) }))
+    .map((j) => {
+      const gradRaw = document.querySelector(`.rom-grad-input[data-grad-for="${j.key}"]`)?.value;
+      const grad = gradRaw !== undefined && gradRaw !== "" ? Number(gradRaw) : null;
+      return { gelenk: j.key, bewertung: getRadioValue(`rom-${j.key}`), grad };
+    })
     .filter((r) => r.bewertung);
 }
 
@@ -4338,10 +4348,33 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
 
   const weiter = onDone || (() => showPatientDetailView({ onLock, homeId, patientId }));
 
+  // Setzt den laufenden Wizard-Zustand aus einem gespeicherten Zwischenstand
+  // wieder ein und springt an die dazu passende Stelle: ist der Bereich
+  // (weiche) bereits bekannt, direkt in dessen ersten Schritt (die davor
+  // liegenden Ebene0/Barthel/Schmerz/TUG-Werte sind im wiederhergestellten
+  // wizard-Objekt bereits enthalten und müssen nicht erneut abgefragt
+  // werden) - sonst zurück zur Bereichsauswahl bzw. Ebene 0, je nachdem wie
+  // der Durchlauf begonnen hatte. Einzelne Unterschritte innerhalb eines
+  // Bereichs (z.B. "mitten in der ROM-Bewertung") werden bewusst nicht exakt
+  // wiederhergestellt, um die Komplexität gering zu halten - stattdessen
+  // zeigt jeder Schritt beim erneuten Durchklicken bereits die vorher
+  // eingegebenen Werte an.
+  function resumeDraft(draft) {
+    Object.assign(wizard, draft.wizard);
+    usedBranchShortcut = !!draft.usedBranchShortcut;
+
+    if (wizard.weiche === "neurologisch") stepBbs7();
+    else if (wizard.weiche === "orthopaedisch") stepSppb();
+    else if (wizard.weiche === "schwerstbetroffen") stepMrcSchwerst();
+    else if (usedBranchShortcut) stepBereichAuswahl();
+    else stepEbene0();
+  }
+
   function renderFrage() {
     const existingAssessments = [...(patient.assessments || [])]
       .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
     const hasExisting = existingAssessments.length > 0;
+    const draft = patient.assessmentDraft;
 
     render(`
       <div class="card">
@@ -4349,6 +4382,16 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
         <p class="muted">Patient: ${escapeHtml(formatPatientName(patient) || "—")}</p>
       </div>
 
+      ${draft ? `
+      <div class="card">
+        <h3>Unvollständige Erfassung gefunden</h3>
+        <p class="muted">Zuletzt bearbeitet: ${escapeHtml(formatIsoDateShort(draft.updatedAt))}${draft.stepTitle ? ` · ${escapeHtml(draft.stepTitle)}` : ""}</p>
+        <div class="row">
+          <button id="assessmentDraftFortsetzenBtn">Fortsetzen</button>
+          <button id="assessmentDraftVerwerfenBtn" class="secondary">Verwerfen &amp; neu beginnen</button>
+        </div>
+      </div>
+      ` : `
       <div class="card">
         <h3>Assessment jetzt durchführen?</h3>
         <div class="row">
@@ -4364,7 +4407,24 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
           <button id="assessmentAbbrechenBtn" class="secondary">Abbrechen</button>
         </div>
       </div>
+      `}
     `);
+
+    if (draft) {
+      document.getElementById("assessmentDraftFortsetzenBtn").onclick = () => resumeDraft(draft);
+      document.getElementById("assessmentDraftVerwerfenBtn").onclick = async () => {
+        try {
+          clearAssessmentDraft(homeId, patientId);
+          await queuePersistRuntimeData();
+          patient.assessmentDraft = null;
+          renderFrage();
+        } catch (err) {
+          console.error(err);
+          alert(err?.message || "Zwischenstand konnte nicht verworfen werden.");
+        }
+      };
+      return;
+    }
 
     document.getElementById("assessmentJetztBtn").onclick = () => stepBereichAuswahl();
     document.getElementById("assessmentSpaeterBtn").onclick = () => renderSpaeter();
@@ -4427,7 +4487,27 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
   // führt.
   let usedBranchShortcut = false;
 
+  // Zwischenspeichern: bei jedem Schrittwechsel wird der aktuelle Wizard-
+  // Zustand in patient.assessmentDraft gesichert (fire-and-forget, blockiert
+  // die Anzeige nicht) - ein Auto-Lock oder Schließen der App mitten in der
+  // Erfassung führt dadurch nicht mehr zum kompletten Verlust der bereits
+  // eingegebenen Werte (siehe renderFrage()/resumeDraft() für den Wiedereinstieg).
+  function persistDraft(stepTitle) {
+    try {
+      saveAssessmentDraft(homeId, patientId, {
+        wizard: JSON.parse(JSON.stringify(wizard)),
+        usedBranchShortcut,
+        stepTitle,
+        updatedAt: new Date().toISOString()
+      });
+      queuePersistRuntimeData();
+    } catch (err) {
+      console.error("Assessment-Zwischenspeicherung fehlgeschlagen", err);
+    }
+  }
+
   function wizardCard(title, bodyHtml, infoKey = null) {
+    persistDraft(title);
     const info = infoKey ? AssessmentInfo.TEST_INFO[infoKey] : null;
     render(`
       <div class="card">
@@ -4938,8 +5018,9 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
   function stepRomAktivBewertung(keys) {
     const joints = Assessment.ROM_AKTIV_GELENKE.filter((j) => keys.includes(j.key));
     const current = new Map((wizard.ortho.romAktiv || []).map((r) => [r.gelenk, r.bewertung]));
+    const currentGrad = new Map((wizard.ortho.romAktiv || []).map((r) => [r.gelenk, r.grad]));
     wizardCard("Aktive ROM – Bewertung", `
-      ${joints.map((j) => renderRomJointRow(j, current.get(j.key))).join("")}
+      ${joints.map((j) => renderRomJointRow(j, current.get(j.key), currentGrad.get(j.key))).join("")}
       <div class="row" style="margin-top:16px;">
         <button id="wizardBack" class="secondary">Zurück</button>
         <button id="wizardNext">Weiter zur Zusammenfassung</button>
@@ -5072,8 +5153,9 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
   function stepRomPassivBewertung(keys) {
     const joints = Assessment.ROM_PASSIV_GELENKE.filter((j) => keys.includes(j.key));
     const current = new Map((wizard.schwerst.romPassiv || []).map((r) => [r.gelenk, r.bewertung]));
+    const currentGrad = new Map((wizard.schwerst.romPassiv || []).map((r) => [r.gelenk, r.grad]));
     wizardCard("Passive ROM – Bewertung", `
-      ${joints.map((j) => renderRomJointRow(j, current.get(j.key))).join("")}
+      ${joints.map((j) => renderRomJointRow(j, current.get(j.key), currentGrad.get(j.key))).join("")}
 
       <h4 style="margin-top:14px;">Zusätzliche Angaben</h4>
       <label class="check-chip" style="justify-content:flex-start; margin-bottom:6px;"><input type="checkbox" id="schmerzBeiBewegung" ${wizard.schwerst.schmerzBeiBewegung ? "checked" : ""}> <span>Schmerz bei Bewegung</span></label>
@@ -5155,6 +5237,7 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
       const msg = document.getElementById("wizardMsg");
       try {
         saveAssessmentResult(homeId, patientId, wizard, intervalMonths);
+        clearAssessmentDraft(homeId, patientId);
         await queuePersistRuntimeData();
         weiter();
       } catch (err) {
@@ -7761,6 +7844,22 @@ export function showFaqView({ onLock }) {
       <div class="accordion-body">
         <ul style="margin:0; padding-left:20px; line-height:1.7;">
           ${FAQ_CHECKLISTE_ITEMS.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+        </ul>
+      </div>
+    </details>
+
+    <details class="accordion">
+      <summary>
+        <span>Umgang mit Blanko-Verordnungen</span>
+        <span class="muted">Vom Arzt vorunterschrieben, ohne Angaben</span>
+      </summary>
+      <div class="accordion-body">
+        <ul style="margin:0; padding-left:20px; line-height:1.7;">
+          <li>Eine Blanko-VO ist bereits vom Arzt unterschrieben/gestempelt, aber ohne Diagnose, ICD-10-Code, Heilmittel und Verordnungsmenge.</li>
+          <li>Vor der ersten Behandlung müssen alle Pflichtangaben (siehe Rezept-Checkliste) vollständig eingetragen sein – sonst ist das Rezept ungültig.</li>
+          <li>Die fehlenden Angaben dürfen nur nach Rücksprache mit der Praxis ergänzt werden, niemals eigenmächtig festgelegt werden. Bei Unsicherheit vor der Behandlung telefonisch mit der Arztpraxis abklären.</li>
+          <li>Das Ausstellungsdatum zählt ab dem Tag, an dem der Arzt unterschrieben hat – nicht ab dem Tag der Ergänzung. Die Fristen (siehe oben) laufen daher schon, auch wenn die Angaben erst später eingetragen werden.</li>
+          <li>In der App: Beim Anlegen des Rezepts ganz normal alle Felder ausfüllen, sobald die Angaben von der Praxis feststehen – die Blanko-VO wird technisch wie jedes andere Rezept behandelt.</li>
         </ul>
       </div>
     </details>

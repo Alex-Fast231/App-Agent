@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FaSt-Doku Viewer</title>
+<link rel="manifest" href="./manifest.webmanifest">
+<meta name="theme-color" content="#1e293b">
+<link rel="apple-touch-icon" href="../icons/icon-192.png">
 <style>
   :root{
     --bg:#f1f5f9; --card:#ffffff; --text:#0f172a; --muted:#64748b;
@@ -36,6 +39,8 @@
   .list-item{ padding:10px 12px; border:1px solid var(--border); border-radius:10px; margin-bottom:8px; cursor:pointer; background:#fff; }
   .list-item:hover{ background:#f8fafc; }
   .list-item.inactive{ opacity:0.55; }
+  details.accordion.inactive{ opacity:0.6; }
+  details.accordion details.accordion{ margin-bottom:8px; }
   table{ width:100%; border-collapse:collapse; font-size:13px; margin-top:8px; }
   th, td{ border:1px solid var(--border); padding:6px 8px; text-align:left; }
   th{ background:#f3f4f6; }
@@ -45,8 +50,13 @@
 </head>
 <body>
 <header>
-  <h1>FaSt-Doku Viewer</h1>
-  <p>Läuft lokal, ohne Internetverbindung. Lädt die täglichen, PIN-geschützten Backup-ZIPs aus der FaSt-Doku App ein. Gespeicherte Daten sind bei jedem Öffnen zusätzlich mit einer PIN gesperrt.</p>
+  <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px;">
+    <div>
+      <h1>FaSt-Doku Viewer</h1>
+      <p>Läuft lokal, ohne Internetverbindung. Lädt die täglichen, PIN-geschützten Backup-ZIPs aus der FaSt-Doku App ein. Gespeicherte Daten sind bei jedem Öffnen zusätzlich mit einer PIN gesperrt.</p>
+    </div>
+    <button id="hardRefreshBtn" class="secondary" style="flex-shrink:0; white-space:nowrap;">🔄 Aktualisieren</button>
+  </div>
 </header>
 <main id="app"></main>
 
@@ -56,8 +66,9 @@
 // Export-Datei laden: die ZIP enthält eine einzige Datei (appData.json)
 // mit dem vollständigen, unverschlüsselten JSON-Stand aller App-Daten,
 // nur durch die ZIP-eigene Passwortverschlüsselung (mit der PIN) vor
-// zufälligem Mitlesen geschützt - siehe modules/autoExport.js in der
-// Haupt-App, das dieses Format täglich per E-Mail verschickt.
+// zufälligem Mitlesen geschützt - siehe modules/backupReminder.js in der
+// Haupt-App, das dieses Format erzeugt (Download bzw. mailto durch den
+// Therapeuten, kein automatischer Versand).
 // ============================================================
 async function readExportFile(file, pin) {
   const zipLib = window.zip;
@@ -188,6 +199,13 @@ function mergeAppDataIntoStore(store, appData) {
     if (!newHomeIds.has(h.homeId)) mergedHomes.push(h);
   });
 
+  // Für die Stundenübersicht (Tag/Zeitraum + Saldo) benötigte Einstellungen
+  // und Zusatzdaten - kommen komplett aus jedem Export mit, daher immer
+  // frisch übernehmen (nur pro Feld auf den bisherigen Stand zurückfallen,
+  // falls ein einzelnes Feld in einem älteren/unvollständigen Export fehlt).
+  const prevSettings = existing.settings || {};
+  const newSettings = appData.settings || {};
+
   store.therapists[therapistId] = {
     therapistId,
     therapistName,
@@ -196,6 +214,15 @@ function mergeAppDataIntoStore(store, appData) {
     nachbestellHistory: appData.nachbestellHistory && appData.nachbestellHistory.length ? appData.nachbestellHistory : (existing.nachbestellHistory || []),
     kilometer: appData.kilometer && appData.kilometer.travelLog ? appData.kilometer : (existing.kilometer || { travelLog: [] }),
     abgabeHistory: appData.abgabeHistory && appData.abgabeHistory.length ? appData.abgabeHistory : (existing.abgabeHistory || []),
+    settings: {
+      workDays: newSettings.workDays || prevSettings.workDays || [],
+      weeklyHours: newSettings.weeklyHours || prevSettings.weeklyHours || "",
+      fastStartDatum: newSettings.fastStartDatum || prevSettings.fastStartDatum || "",
+      stundenStartsaldoMinuten: newSettings.stundenStartsaldoMinuten || prevSettings.stundenStartsaldoMinuten || 0
+    },
+    abwesenheiten: appData.abwesenheiten && appData.abwesenheiten.length ? appData.abwesenheiten : (existing.abwesenheiten || []),
+    specialDays: appData.specialDays && appData.specialDays.length ? appData.specialDays : (existing.specialDays || []),
+    stundenAbgleiche: appData.stundenAbgleiche && appData.stundenAbgleiche.length ? appData.stundenAbgleiche : (existing.stundenAbgleiche || []),
     lastImportAt: new Date().toISOString()
   };
 
@@ -260,7 +287,24 @@ function renderGate() {
 // ============================================================
 const app = document.getElementById("app");
 let store = loadStore();
-let uiState = { expandedTherapist: null, activeTab: {}, searchText: {}, selectedPatient: {}, selectedArzt: {} };
+let uiState = {
+  expandedTherapist: null,
+  activeTab: {},
+  searchText: {},
+  groupMode: {},      // pro Therapeut: "home" | "alpha" (Ansicht im Reiter Einrichtung/Patient)
+  openHomes: {},      // pro Therapeut: Set der aufgeklappten Einrichtungs-IDs
+  openPatients: {},   // pro Therapeut: Set der aufgeklappten Patienten-IDs
+  openArzt: {},       // pro Therapeut: Set der aufgeklappten Arztnamen
+  stundenMode: {},    // pro Therapeut: "tag" | "zeitraum"
+  stundenDate: {},    // pro Therapeut: gewähltes Einzeldatum (Tag-Modus)
+  stundenFrom: {},    // pro Therapeut: Zeitraum-Start
+  stundenTo: {}       // pro Therapeut: Zeitraum-Ende
+};
+
+function getStateSet(bucket, therapistId) {
+  if (!bucket[therapistId]) bucket[therapistId] = new Set();
+  return bucket[therapistId];
+}
 
 function esc(value) {
   return String(value == null ? "" : value)
@@ -327,121 +371,347 @@ function getKilometerForPatient(therapist, patientId) {
 }
 
 function renderZuzahlungLabel(status) {
-  if (status === "ja") return "Ja";
-  if (status === "nein") return "Nein";
-  if (status === "ungeklaert") return "Noch nicht geklärt";
+  if (status === "ja") return "Befreit: Ja";
+  if (status === "nein") return "Befreit: Nein";
+  if (status === "ungeklaert") return "Befreit: noch nicht geklärt";
   return "—";
 }
 
-function renderPatientDetail(therapist, home, patient) {
-  const rezepte = [...(patient.rezepte || [])].sort((a, b) => String(b.ausstell || "").localeCompare(String(a.ausstell || "")));
+// Chronologischer Vergleich von TT.MM.JJJJ-Daten (absteigend, neueste zuerst).
+// parseDeDate() liefert das vergleichbare JJJJ-MM-DD-Format zurück, das sich
+// als String korrekt lexikografisch sortieren lässt - eine naive Sortierung
+// der Rohwerte "TT.MM.JJJJ" wäre dagegen falsch (z.B. "20.01.2026" vs.
+// "05.03.2026": chronologisch früher, aber alphabetisch "größer").
+function compareDeDatesDesc(a, b) {
+  const da = parseDeDate(a);
+  const db = parseDeDate(b);
+  if (da && db) return db.localeCompare(da);
+  if (da) return -1;
+  if (db) return 1;
+  return 0;
+}
+
+// ============================================================
+// Stundenkonto/Stundensaldo-Logik (Kopie der Kernlogik aus ui/views.js der
+// Haupt-App, für die neue Stundenübersicht im Viewer) - berücksichtigt
+// Arbeitstage/-stunden pro Woche, das FaSt-Startdatum (Saldo zählt erst ab
+// diesem Datum), Abwesenheiten (Urlaub/Krank), Feiertage, den Startsaldo vor
+// App-Einführung sowie manuelle Stundenabgleiche (Auszahlung/Überstundenfrei).
+// ============================================================
+function getFastStartDatumComparable(settings) {
+  const value = String(settings?.fastStartDatum || "").trim();
+  if (!value) return "";
+  return parseComparableDate(value) ? value : (parseDeDate(value) || "");
+}
+function getEffectiveTimeSummaryFromDate(fromDate, fastStartComparable) {
+  const requestedFrom = parseDeDate(fromDate);
+  if (requestedFrom && fastStartComparable) {
+    return formatDeDate(requestedFrom > fastStartComparable ? requestedFrom : fastStartComparable);
+  }
+  if (requestedFrom) return formatDeDate(requestedFrom);
+  if (fastStartComparable) return formatDeDate(fastStartComparable);
+  return String(fromDate || "").trim();
+}
+function isDateInRange(dateValue, fromDate, toDate) {
+  const current = parseDeDate(dateValue);
+  const from = parseDeDate(fromDate);
+  const to = parseDeDate(toDate);
+  if (!current) return false;
+  if (from && current < from) return false;
+  if (to && current > to) return false;
+  return true;
+}
+function listComparableDatesInRange(fromDate, toDate) {
+  const from = parseDeDate(fromDate);
+  const to = parseDeDate(toDate);
+  const start = parseComparableDate(from);
+  const end = parseComparableDate(to);
+  if (!start || !end || start > end) return [];
+  const rows = [];
+  const cursor = new Date(start.getTime());
+  while (cursor <= end) {
+    rows.push(getComparableFromDate(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return rows;
+}
+function getWorkDayCodeFromComparable(comparableDate) {
+  const date = parseComparableDate(comparableDate);
+  if (!date) return "";
+  const dayMap = ["SO", "MO", "DI", "MI", "DO", "FR", "SA"];
+  return dayMap[date.getDay()] || "";
+}
+function getDailyPlannedMinutes(settings) {
+  const workDays = Array.isArray(settings?.workDays) ? settings.workDays.filter(Boolean) : [];
+  const weeklyHoursValue = String(settings?.weeklyHours || "").replace(",", ".").trim();
+  const weeklyHours = Number(weeklyHoursValue);
+  if (!workDays.length || !Number.isFinite(weeklyHours) || weeklyHours <= 0) return 0;
+  return Math.round((weeklyHours * 60) / workDays.length);
+}
+function getStundenStartsaldoMinutes(settings) {
+  const value = Number(settings?.stundenStartsaldoMinuten || 0);
+  return Number.isFinite(value) ? Math.round(value) : 0;
+}
+function getSignedMinutesLabel(minutes) {
+  const total = Number(minutes) || 0;
+  const sign = total < 0 ? "-" : "+";
+  const absolute = Math.abs(total);
+  const h = Math.floor(absolute / 60);
+  const m = absolute % 60;
+  return `${sign}${h}:${String(m).padStart(2, "0")} Stunden`;
+}
+function formatHoursClockLabel(minutes) {
+  const total = Math.max(0, Number(minutes) || 0);
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  return `${h}:${String(m).padStart(2, "0")} Stunden`;
+}
+function formatMinutesLabel(minutes) {
+  const total = Number(minutes) || 0;
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  if (!h) return `${m} Min.`;
+  if (!m) return `${h} Std.`;
+  return `${h} Std. ${m} Min.`;
+}
+function isComparableDateWithinAbsence(comparableDate, absence) {
+  const from = parseDeDate(absence?.from);
+  const to = parseDeDate(absence?.to);
+  if (!from || !to || !comparableDate) return false;
+  return comparableDate >= from && comparableDate <= to;
+}
+function getAbsenceForComparableDate(therapist, comparableDate) {
+  return (therapist.abwesenheiten || []).find((item) => isComparableDateWithinAbsence(comparableDate, item)) || null;
+}
+function getSpecialDayForComparableDate(therapist, comparableDate) {
+  if (!comparableDate) return null;
+  const targetDate = formatDeDate(comparableDate);
+  return (therapist.specialDays || []).find((item) => item?.date === targetDate) || null;
+}
+
+function rezeptSummaryForViewer(rezept) {
+  const items = rezept?.items || [];
+  const parts = items.map((item) => {
+    if (item?.type === "Blanko") return "Blanko";
+    return item?.count ? `${item.type} ${item.count}x` : item?.type;
+  });
+  return parts.join(", ") || "Keine Leistung";
+}
+
+function collectAllTimeEntriesForTherapist(therapist) {
+  const rows = [];
+  (therapist.homes || []).forEach((home) => {
+    (home.patients || []).forEach((patient) => {
+      const patientName = `${patient.lastName || ""}, ${patient.firstName || ""}`.replace(/^,\s*/, "").trim() || "Ohne Namen";
+      (patient.rezepte || []).forEach((rezept) => {
+        (rezept.timeEntries || []).forEach((entry) => {
+          const minutes = Number(entry?.minutes || 0);
+          if (!Number.isFinite(minutes) || minutes <= 0) return;
+          rows.push({
+            date: String(entry?.date || "").trim(),
+            minutes,
+            patientName,
+            birthDate: patient.birthDate || "",
+            homeName: home.name || "",
+            homeId: home.homeId || "",
+            patientId: patient.patientId || "",
+            rezeptLabel: rezeptSummaryForViewer(rezept)
+          });
+        });
+      });
+    });
+  });
+  return rows;
+}
+
+// Liefert Soll-/Ist-Zeit + Gesamtsaldo für den angefragten Zeitraum (Saldo
+// zählt - wie in der Haupt-App - erst ab dem FaSt-Startdatum) sowie eine vom
+// Startdatum UNABHÄNGIGE Patienten-Aufstellung ("wer wurde im gewählten
+// Zeitraum tatsächlich behandelt", reine Ist-Übersicht statt Saldo-Bestandteil).
+function getTimePeriodSummaryForViewer(therapist, fromDate, toDate) {
+  const settings = therapist.settings || {};
+  const fastStartComparable = getFastStartDatumComparable(settings);
+  const effectiveFromDate = getEffectiveTimeSummaryFromDate(fromDate, fastStartComparable);
+
+  const allEntries = collectAllTimeEntriesForTherapist(therapist);
+  const totalsByDate = new Map();
+  allEntries
+    .filter((entry) => isDateInRange(entry.date, effectiveFromDate, toDate))
+    .forEach((entry) => totalsByDate.set(entry.date, (totalsByDate.get(entry.date) || 0) + entry.minutes));
+
+  const periodDates = listComparableDatesInRange(effectiveFromDate, toDate);
+  const workDays = Array.isArray(settings.workDays) ? settings.workDays : [];
+  const dailyPlannedMinutes = getDailyPlannedMinutes(settings);
+
+  let totalMinutes = 0;
+  let plannedMinutes = 0;
+  periodDates.forEach((comparableDate) => {
+    const dateDe = formatDeDate(comparableDate);
+    totalMinutes += Number(totalsByDate.get(dateDe) || 0);
+    const workDayCode = getWorkDayCodeFromComparable(comparableDate);
+    const isWorkDay = workDays.includes(workDayCode);
+    const absence = isWorkDay ? getAbsenceForComparableDate(therapist, comparableDate) : null;
+    const specialDay = isWorkDay && !absence ? getSpecialDayForComparableDate(therapist, comparableDate) : null;
+    if (isWorkDay && !absence && !specialDay) plannedMinutes += dailyPlannedMinutes;
+  });
+
+  const appSaldoMinutes = totalMinutes - plannedMinutes;
+  const stundenStartsaldoMinuten = getStundenStartsaldoMinutes(settings);
+  const stundenAbgleichMinuten = (therapist.stundenAbgleiche || [])
+    .filter((item) => isDateInRange(item?.datum, effectiveFromDate, toDate))
+    .reduce((sum, item) => sum + Math.max(0, Number(item?.minuten || 0)), 0);
+  const saldoMinutes = appSaldoMinutes + stundenStartsaldoMinuten - stundenAbgleichMinuten;
+
+  const byPatient = new Map();
+  allEntries
+    .filter((entry) => isDateInRange(entry.date, fromDate, toDate))
+    .forEach((entry) => {
+      const key = entry.patientId || entry.patientName;
+      if (!byPatient.has(key)) {
+        byPatient.set(key, { patientName: entry.patientName, birthDate: entry.birthDate, homeName: entry.homeName, totalMinutes: 0 });
+      }
+      byPatient.get(key).totalMinutes += entry.minutes;
+    });
+  const patientRows = Array.from(byPatient.values()).sort((a, b) => a.patientName.localeCompare(b.patientName, "de"));
+
+  return {
+    totalMinutes,
+    plannedMinutes,
+    appSaldoMinutes,
+    stundenStartsaldoMinuten,
+    saldoMinutes,
+    fastStartDatum: fastStartComparable ? formatDeDate(fastStartComparable) : "",
+    patientRows
+  };
+}
+
+function bindDeDateAutoFormat(input) {
+  if (!input) return;
+  input.addEventListener("input", () => {
+    const digits = input.value.replace(/\D/g, "").slice(0, 8);
+    let formatted = digits;
+    if (digits.length > 4) formatted = `${digits.slice(0, 2)}.${digits.slice(2, 4)}.${digits.slice(4)}`;
+    else if (digits.length > 2) formatted = `${digits.slice(0, 2)}.${digits.slice(2)}`;
+    input.value = formatted;
+  });
+}
+
+function renderPatientDetailBody(therapist, home, patient) {
+  const rezepte = [...(patient.rezepte || [])].sort((a, b) => compareDeDatesDesc(a.ausstell, b.ausstell));
   const kilometerRows = getKilometerForPatient(therapist, patient.patientId);
-  const patientName = `${patient.lastName || ""}, ${patient.firstName || ""}`.replace(/^,\s*/, "").trim();
+
+  // Assessment-Datum liegt bereits im vergleichbaren JJJJ-MM-DD-Format vor
+  // (siehe data/normalization.js), daher sortiert ein reiner String-Vergleich
+  // hier bereits korrekt chronologisch.
+  const sortedAssessments = [...(patient.assessments || [])]
+    .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+
+  // Therapieberichte liegen pro Rezept vor - für eine patientenweite,
+  // chronologische Liste erst über alle Rezepte zusammenführen und dann nach
+  // Erstellzeitpunkt (ISO-String, sortiert korrekt lexikografisch) ordnen.
+  const sortedDoctorReports = rezepte
+    .flatMap((r) => (r.doctorReports || []))
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
 
   return `
-    <div class="card">
-      <h3>${esc(patientName)} ${patient.inactive ? '<span class="pill-red">Inaktiv (gelöscht)</span>' : ""}</h3>
-      <p class="muted">Heim: ${esc(home.name || "—")} · Geburtsdatum: ${esc(patient.birthDate || "—")}</p>
+    <p class="muted">Heim: ${esc(home.name || "—")} · Geburtsdatum: ${esc(patient.birthDate || "—")}${patient.inactive ? ' · <span class="pill-red">Inaktiv (gelöscht)</span>' : ""}</p>
 
-      <div class="detail-section">
-        <h4>Rezepte</h4>
-        ${rezepte.length === 0 ? '<p class="muted">Keine Rezepte.</p>' : `
+    <div class="detail-section">
+      <h4>Rezepte</h4>
+      ${rezepte.length === 0 ? '<p class="muted">Keine Rezepte.</p>' : `
+        <table>
+          <tr><th>Heilmittel</th><th>Anzahl</th><th>Ausstellung</th><th>Frist</th><th></th></tr>
+          ${rezepte.map((r) => `
+            <tr>
+              <td>${esc((r.items || []).map((i) => i.type).join(", ") || "—")}</td>
+              <td>${esc((r.items || []).map((i) => i.count).filter(Boolean).join(", ") || "—")}</td>
+              <td>${esc(r.ausstell || "—")}</td>
+              <td>${r.privat ? "—" : esc(getRezeptFristSummary(r))}</td>
+              <td>${r.privat ? '<span class="pill">🔒 Privat</span>' : ""}</td>
+            </tr>
+          `).join("")}
+        </table>
+      `}
+    </div>
+
+    <div class="detail-section">
+      <h4>Zuzahlungsstatus</h4>
+      <p>${esc(renderZuzahlungLabel(patient.zuzahlungsstatus))}</p>
+    </div>
+
+    <div class="detail-section">
+      <h4>Assessments</h4>
+      ${sortedAssessments.length === 0 ? '<p class="muted">Keine Assessments.</p>' : `
+        <table>
+          <tr><th>Datum</th><th>Ergebnis</th></tr>
+          ${sortedAssessments.map((a) => `<tr><td>${esc(formatDeDate(a.date))}</td><td>${esc(a.content || "—")}</td></tr>`).join("")}
+        </table>
+      `}
+    </div>
+
+    <div class="detail-section">
+      <h4>Therapieberichte</h4>
+      ${sortedDoctorReports.length === 0 ? '<p class="muted">Keine Therapieberichte.</p>' : `
+        <table>
+          <tr><th>Datum</th><th>Inhalt</th></tr>
+          ${sortedDoctorReports.map((rep) => `<tr><td>${esc(formatDeDate((rep.createdAt || "").slice(0, 10)))}</td><td>${esc(rep.content || "—")}</td></tr>`).join("")}
+        </table>
+      `}
+    </div>
+
+    <div class="detail-section">
+      <h4>Doku</h4>
+      ${(() => {
+        const allEntries = [...(patient.entries || []), ...rezepte.flatMap((r) => r.entries || [])];
+        return allEntries.length === 0 ? '<p class="muted">Keine Dokumentationseinträge.</p>' : `
           <table>
-            <tr><th>Heilmittel</th><th>Anzahl</th><th>Ausstellung</th><th>Frist</th></tr>
-            ${rezepte.map((r) => `
-              <tr>
-                <td>${esc((r.items || []).map((i) => i.type).join(", ") || "—")}</td>
-                <td>${esc((r.items || []).map((i) => i.count).filter(Boolean).join(", ") || "—")}</td>
-                <td>${esc(r.ausstell || "—")}</td>
-                <td>${esc(getRezeptFristSummary(r))}</td>
-              </tr>
-            `).join("")}
+            <tr><th>Datum</th><th>Text</th></tr>
+            ${allEntries.map((e) => `<tr><td>${esc(e.date || "—")}</td><td>${esc(e.text || "—")}</td></tr>`).join("")}
           </table>
-        `}
-      </div>
+        `;
+      })()}
+    </div>
 
-      <div class="detail-section">
-        <h4>Zuzahlungsstatus</h4>
-        <p>${esc(renderZuzahlungLabel(patient.zuzahlungsstatus))}</p>
-      </div>
+    <div class="detail-section">
+      <h4>Kilometer</h4>
+      ${kilometerRows.length === 0 ? '<p class="muted">Keine Kilometer-Einträge.</p>' : `
+        <table>
+          <tr><th>Datum</th><th>Von</th><th>Nach</th><th>Km</th></tr>
+          ${kilometerRows.map((k) => `<tr><td>${esc(k.date || "—")}</td><td>${esc(k.fromLabel || "—")}</td><td>${esc(k.toLabel || "—")}</td><td>${esc(k.km ?? "—")}</td></tr>`).join("")}
+        </table>
+      `}
+    </div>
 
-      <div class="detail-section">
-        <h4>Assessments</h4>
-        ${(patient.assessments || []).length === 0 ? '<p class="muted">Keine Assessments.</p>' : `
+    <div class="detail-section">
+      <h4>Abgabeliste</h4>
+      ${(() => {
+        const rows = (therapist.abgabeHistory || []).flatMap((h) => (h.rows || [])).filter((row) =>
+          `${row.patientLastName || ""}${row.patientFirstName || ""}`.trim() &&
+          (row.patientLastName === patient.lastName && row.patientFirstName === patient.firstName)
+        );
+        return rows.length === 0 ? '<p class="muted">Keine Einträge in gespeicherten Abgabelisten.</p>' : `
           <table>
-            <tr><th>Datum</th><th>Ergebnis</th></tr>
-            ${patient.assessments.map((a) => `<tr><td>${esc(formatDeDate(a.date))}</td><td>${esc(a.content || "—")}</td></tr>`).join("")}
+            <tr><th>Leistung</th><th>Ausstellung</th></tr>
+            ${rows.map((row) => `<tr><td>${esc(row.leistung || "—")}</td><td>${esc(row.ausstell || "—")}</td></tr>`).join("")}
           </table>
-        `}
-      </div>
-
-      <div class="detail-section">
-        <h4>Therapieberichte</h4>
-        ${rezepte.every((r) => !(r.doctorReports || []).length) ? '<p class="muted">Keine Therapieberichte.</p>' : `
-          <table>
-            <tr><th>Datum</th><th>Inhalt</th></tr>
-            ${rezepte.flatMap((r) => (r.doctorReports || []).map((rep) => `<tr><td>${esc(formatDeDate(rep.createdAt?.slice(0, 10)))}</td><td>${esc(rep.content || "—")}</td></tr>`)).join("")}
-          </table>
-        `}
-      </div>
-
-      <div class="detail-section">
-        <h4>Doku</h4>
-        ${(() => {
-          const allEntries = [...(patient.entries || []), ...rezepte.flatMap((r) => r.entries || [])];
-          return allEntries.length === 0 ? '<p class="muted">Keine Dokumentationseinträge.</p>' : `
-            <table>
-              <tr><th>Datum</th><th>Text</th></tr>
-              ${allEntries.map((e) => `<tr><td>${esc(e.date || "—")}</td><td>${esc(e.text || "—")}</td></tr>`).join("")}
-            </table>
-          `;
-        })()}
-      </div>
-
-      <div class="detail-section">
-        <h4>Kilometer</h4>
-        ${kilometerRows.length === 0 ? '<p class="muted">Keine Kilometer-Einträge.</p>' : `
-          <table>
-            <tr><th>Datum</th><th>Von</th><th>Nach</th><th>Km</th></tr>
-            ${kilometerRows.map((k) => `<tr><td>${esc(k.date || "—")}</td><td>${esc(k.fromLabel || "—")}</td><td>${esc(k.toLabel || "—")}</td><td>${esc(k.km ?? "—")}</td></tr>`).join("")}
-          </table>
-        `}
-      </div>
-
-      <div class="detail-section">
-        <h4>Abgabeliste</h4>
-        ${(() => {
-          const rows = (therapist.abgabeHistory || []).flatMap((h) => (h.rows || [])).filter((row) =>
-            `${row.patientLastName || ""}${row.patientFirstName || ""}`.trim() &&
-            (row.patientLastName === patient.lastName && row.patientFirstName === patient.firstName)
-          );
-          return rows.length === 0 ? '<p class="muted">Keine Einträge in gespeicherten Abgabelisten.</p>' : `
-            <table>
-              <tr><th>Leistung</th><th>Ausstellung</th></tr>
-              ${rows.map((row) => `<tr><td>${esc(row.leistung || "—")}</td><td>${esc(row.ausstell || "—")}</td></tr>`).join("")}
-            </table>
-          `;
-        })()}
-      </div>
+        `;
+      })()}
     </div>
   `;
 }
 
-function renderDoctorDetail(therapist, doctorName) {
+function renderDoctorDetailBody(therapist, doctorName) {
   const patients = getPatientsForDoctor(therapist, doctorName);
   const arztInfo = (therapist.aerzte || []).find((a) => a.name === doctorName);
   return `
-    <div class="card">
-      <h3>${esc(doctorName)}</h3>
-      ${arztInfo?.adresse ? `<p class="muted">${esc(arztInfo.adresse)}</p>` : ""}
-      <h4 style="margin-top:14px;">Zugeordnete Patienten</h4>
-      ${patients.length === 0 ? '<p class="muted">Keine zugeordneten Patienten.</p>' : `
-        <table>
-          <tr><th>Patient</th><th>Heim</th></tr>
-          ${patients.map((row) => `<tr><td>${esc(`${row.patient.lastName}, ${row.patient.firstName}`)}</td><td>${esc(row.home.name || "—")}</td></tr>`).join("")}
-        </table>
-      `}
-    </div>
+    ${arztInfo?.adresse ? `<p class="muted">${esc(arztInfo.adresse)}</p>` : ""}
+    <h4 style="margin-top:${arztInfo?.adresse ? "14px" : "0"};">Zugeordnete Patienten</h4>
+    ${patients.length === 0 ? '<p class="muted">Keine zugeordneten Patienten.</p>' : `
+      <table>
+        <tr><th>Patient</th><th>Geburtsdatum</th><th>Heim</th></tr>
+        ${patients.map((row) => `<tr><td>${esc(`${row.patient.lastName}, ${row.patient.firstName}`)}</td><td>${esc(row.patient.birthDate || "—")}</td><td>${esc(row.home.name || "—")}</td></tr>`).join("")}
+      </table>
+    `}
   `;
 }
 
@@ -515,64 +785,250 @@ function renderAbgabelistenTab(therapist) {
   `).join("");
 }
 
+function renderPatientSummaryLine(patient) {
+  return `${esc(`${patient.lastName}, ${patient.firstName}`)} <span class="muted" style="font-weight:400;">· geb. ${esc(patient.birthDate || "—")}</span>`;
+}
+
+// Reiter "Einrichtung / Patient", Ansicht "Nach Einrichtung": Einrichtungen
+// und Patienten als eigenständige, unabhängig aufklappbare Accordions
+// (statt Klick-Auswahl mit Detail-Panel unterhalb der gesamten Liste).
+function renderPatientenHomeGrouped(therapist, homes, search) {
+  const openHomes = getStateSet(uiState.openHomes, therapist.therapistId);
+  const openPatients = getStateSet(uiState.openPatients, therapist.therapistId);
+
+  const filteredHomes = (homes || []).map((home) => {
+    const patients = [...(home.patients || [])]
+      .filter((p) => {
+        if (!search) return true;
+        const haystack = `${p.firstName} ${p.lastName} ${p.birthDate} ${home.name}`.toLowerCase();
+        return haystack.includes(search);
+      })
+      .sort((a, b) => `${a.lastName} ${a.firstName}`.localeCompare(`${b.lastName} ${b.firstName}`, "de"));
+    return { home, patients };
+  })
+    .filter((row) => !search || row.patients.length > 0)
+    .sort((a, b) => (a.home.name || "").localeCompare(b.home.name || "", "de"));
+
+  if (filteredHomes.length === 0) return '<p class="muted">Keine Einrichtungen/Patienten gefunden.</p>';
+
+  return filteredHomes.map(({ home, patients }) => {
+    const isHomeOpen = search ? true : openHomes.has(home.homeId);
+    return `
+      <details class="accordion" data-home-id="${esc(home.homeId)}" ${isHomeOpen ? "open" : ""}>
+        <summary>
+          <span>${esc(home.name || "—")}</span>
+          <span class="muted">${patients.length} Patient(en)</span>
+        </summary>
+        <div class="accordion-body">
+          ${patients.length === 0 ? '<p class="muted">Keine Patienten.</p>' : patients.map((patient) => {
+            const isPatientOpen = openPatients.has(patient.patientId);
+            return `
+              <details class="accordion ${patient.inactive ? "inactive" : ""}" data-patient-id="${esc(patient.patientId)}" ${isPatientOpen ? "open" : ""}>
+                <summary>
+                  <span>${renderPatientSummaryLine(patient)}${patient.inactive ? ' <span class="pill-red">Inaktiv</span>' : ""}</span>
+                </summary>
+                <div class="accordion-body">${renderPatientDetailBody(therapist, home, patient)}</div>
+              </details>
+            `;
+          }).join("")}
+        </div>
+      </details>
+    `;
+  }).join("");
+}
+
+// Reiter "Einrichtung / Patient", Ansicht "Alle alphabetisch": flache Liste
+// aller Patienten über alle Einrichtungen hinweg, ebenfalls als aufklappbare
+// Accordions statt Klick-Auswahl.
+function renderPatientenAlpha(therapist, rows) {
+  const openPatients = getStateSet(uiState.openPatients, therapist.therapistId);
+  if (rows.length === 0) return '<p class="muted">Keine Patienten gefunden.</p>';
+
+  return rows.map(({ home, patient }) => {
+    const isOpen = openPatients.has(patient.patientId);
+    return `
+      <details class="accordion ${patient.inactive ? "inactive" : ""}" data-patient-id="${esc(patient.patientId)}" ${isOpen ? "open" : ""}>
+        <summary>
+          <span>${renderPatientSummaryLine(patient)}${patient.inactive ? ' <span class="pill-red">Inaktiv</span>' : ""}</span>
+          <span class="muted">${esc(home.name || "—")}</span>
+        </summary>
+        <div class="accordion-body">${renderPatientDetailBody(therapist, home, patient)}</div>
+      </details>
+    `;
+  }).join("");
+}
+
+// Reiter "Ärzte": ebenfalls Accordions statt Klick-Auswahl mit Detail-Panel
+// unterhalb der Liste.
+function renderAerzteTab(therapist, doctors, search) {
+  const openArzt = getStateSet(uiState.openArzt, therapist.therapistId);
+  const filtered = search ? doctors.filter((d) => d.name.toLowerCase().includes(search)) : doctors;
+  if (filtered.length === 0) return '<p class="muted">Keine Ärzte gefunden.</p>';
+
+  return filtered.map((d) => {
+    const isOpen = openArzt.has(d.name);
+    return `
+      <details class="accordion" data-arzt-name="${esc(d.name)}" ${isOpen ? "open" : ""}>
+        <summary><span>${esc(d.name)}</span></summary>
+        <div class="accordion-body">${renderDoctorDetailBody(therapist, d.name)}</div>
+      </details>
+    `;
+  }).join("");
+}
+
+// Reiter "Befreiungen": Liste aller Patienten, die als zuzahlungsbefreit
+// markiert sind, über alle Einrichtungen des Therapeuten hinweg.
+function getBefreitePatientsForTherapist(therapist) {
+  const rows = [];
+  (therapist.homes || []).forEach((home) => {
+    (home.patients || []).forEach((patient) => {
+      if (patient.zuzahlungsstatus === "ja") rows.push({ home, patient });
+    });
+  });
+  return rows.sort((a, b) => `${a.patient.lastName} ${a.patient.firstName}`.localeCompare(`${b.patient.lastName} ${b.patient.firstName}`, "de"));
+}
+
+function renderBefreiungenTab(therapist) {
+  const rows = getBefreitePatientsForTherapist(therapist);
+  if (rows.length === 0) return '<p class="muted">Keine als zuzahlungsbefreit markierten Patienten.</p>';
+
+  const openPatients = getStateSet(uiState.openPatients, therapist.therapistId);
+  return rows.map(({ home, patient }) => {
+    const isOpen = openPatients.has(patient.patientId);
+    return `
+      <details class="accordion ${patient.inactive ? "inactive" : ""}" data-patient-id="${esc(patient.patientId)}" ${isOpen ? "open" : ""}>
+        <summary>
+          <span>${renderPatientSummaryLine(patient)}</span>
+          <span class="muted">${esc(home.name || "—")}</span>
+        </summary>
+        <div class="accordion-body">${renderPatientDetailBody(therapist, home, patient)}</div>
+      </details>
+    `;
+  }).join("");
+}
+
+// Reiter "Stunden": Tag- oder Zeitraum-Auswahl, Übersicht der im gewählten
+// Zeitraum tatsächlich geloggten Patienten-Zeiten sowie der Stundensaldo
+// (analog zur "Stundenkonto"-Funktion der Haupt-App).
+function renderStundenTab(therapist) {
+  const tid = therapist.therapistId;
+  const mode = uiState.stundenMode[tid] || "tag";
+  const todayDe = formatDeDate(getComparableFromDate(new Date()));
+  const singleDate = uiState.stundenDate[tid] || todayDe;
+  const fromDate = uiState.stundenFrom[tid] || todayDe;
+  const toDate = uiState.stundenTo[tid] || todayDe;
+
+  const effectiveFrom = mode === "tag" ? singleDate : fromDate;
+  const effectiveTo = mode === "tag" ? singleDate : toDate;
+  const summary = getTimePeriodSummaryForViewer(therapist, effectiveFrom, effectiveTo);
+
+  return `
+    <div class="card">
+      <h3 style="margin-top:0;">Stundenübersicht</h3>
+      <div class="row" style="margin-top:0;">
+        <button class="stundenModeBtn ${mode === "tag" ? "" : "secondary"}" data-mode="tag" style="flex:1;">Tag</button>
+        <button class="stundenModeBtn ${mode === "zeitraum" ? "" : "secondary"}" data-mode="zeitraum" style="flex:1;">Zeitraum</button>
+      </div>
+      ${mode === "tag" ? `
+        <label for="stundenDateInput">Datum</label>
+        <input id="stundenDateInput" class="stundenDateInput" type="text" inputmode="numeric" placeholder="TT.MM.JJJJ" value="${esc(singleDate)}">
+      ` : `
+        <label for="stundenFromInput">Von</label>
+        <input id="stundenFromInput" class="stundenFromInput" type="text" inputmode="numeric" placeholder="TT.MM.JJJJ" value="${esc(fromDate)}">
+        <label for="stundenToInput">Bis</label>
+        <input id="stundenToInput" class="stundenToInput" type="text" inputmode="numeric" placeholder="TT.MM.JJJJ" value="${esc(toDate)}">
+      `}
+    </div>
+
+    <div class="card">
+      <h4 style="margin-top:0;">Stundensaldo im gewählten Zeitraum</h4>
+      <table>
+        <tr><th>Soll-Zeit</th><td>${esc(formatHoursClockLabel(summary.plannedMinutes))}</td></tr>
+        <tr><th>Ist-Zeit</th><td>${esc(formatHoursClockLabel(summary.totalMinutes))}</td></tr>
+        <tr><th>Zeitraum-Saldo</th><td>${esc(formatHoursClockLabel(Math.abs(summary.appSaldoMinutes)))} ${summary.appSaldoMinutes > 0 ? "Plus" : summary.appSaldoMinutes < 0 ? "Minus" : "Ausgeglichen"}</td></tr>
+        <tr><th>Startsaldo vor App/FaSt</th><td>${esc(getSignedMinutesLabel(summary.stundenStartsaldoMinuten))}</td></tr>
+        <tr><th>Gesamt-Stundensaldo</th><td style="font-weight:700;">${esc(getSignedMinutesLabel(summary.saldoMinutes))}</td></tr>
+      </table>
+      ${summary.fastStartDatum ? `<p class="muted" style="margin-top:8px;">FaSt-Startdatum: ${esc(summary.fastStartDatum)} (nur Zeiten ab diesem Datum fließen in den Stundensaldo ein).</p>` : ""}
+    </div>
+
+    ${mode === "tag" ? `
+      <div class="card">
+        <h4 style="margin-top:0;">Patienten am gewählten Tag</h4>
+        ${summary.patientRows.length === 0 ? '<p class="muted">Keine erfassten Zeiten an diesem Tag.</p>' : `
+          <table>
+            <tr><th>Patient</th><th>Geburtsdatum</th><th>Heim</th><th>Zeit gesamt</th></tr>
+            ${summary.patientRows.map((row) => `
+              <tr>
+                <td>${esc(row.patientName)}</td>
+                <td>${esc(row.birthDate || "—")}</td>
+                <td>${esc(row.homeName || "—")}</td>
+                <td>${esc(formatMinutesLabel(row.totalMinutes))}</td>
+              </tr>
+            `).join("")}
+          </table>
+        `}
+      </div>
+    ` : ""}
+  `;
+}
+
 function renderTherapistBody(therapist) {
-  const tab = uiState.activeTab[therapist.therapistId] || "patienten";
-  const search = (uiState.searchText[therapist.therapistId] || "").trim().toLowerCase();
+  const tid = therapist.therapistId;
+  const tab = uiState.activeTab[tid] || "patienten";
+  const search = (uiState.searchText[tid] || "").trim().toLowerCase();
   const hasSearch = tab === "patienten" || tab === "aerzte";
 
+  let extraControlsHtml = "";
   let listHtml = "";
-  let detailHtml = "";
 
   if (tab === "patienten") {
-    let rows = getAllPatientsForTherapist(therapist);
-    if (search) {
-      rows = rows.filter((row) => {
-        const haystack = `${row.patient.firstName} ${row.patient.lastName} ${row.patient.birthDate} ${row.home.name}`.toLowerCase();
-        return haystack.includes(search);
-      });
-    }
-    listHtml = rows.length === 0 ? '<p class="muted">Keine Patienten gefunden.</p>' : rows.map((row) => `
-      <div class="list-item ${row.patient.inactive ? "inactive" : ""}" data-patient-id="${esc(row.patient.patientId)}" data-home-id="${esc(row.home.homeId)}">
-        <strong>${esc(`${row.patient.lastName}, ${row.patient.firstName}`)}</strong>
-        <div class="muted">${esc(row.home.name || "—")}${row.patient.inactive ? " · inaktiv" : ""}</div>
+    const groupMode = uiState.groupMode[tid] || "home";
+    extraControlsHtml = `
+      <div class="row" style="margin-top:0;">
+        <button class="groupModeBtn ${groupMode === "home" ? "" : "secondary"}" data-mode="home" style="flex:1;">Nach Einrichtung</button>
+        <button class="groupModeBtn ${groupMode === "alpha" ? "" : "secondary"}" data-mode="alpha" style="flex:1;">Alle alphabetisch</button>
       </div>
-    `).join("");
-
-    const selectedPatientId = uiState.selectedPatient[therapist.therapistId];
-    if (selectedPatientId) {
-      const found = rows.find((r) => r.patient.patientId === selectedPatientId) || getAllPatientsForTherapist(therapist).find((r) => r.patient.patientId === selectedPatientId);
-      if (found) detailHtml = renderPatientDetail(therapist, found.home, found.patient);
+    `;
+    if (groupMode === "alpha") {
+      let rows = getAllPatientsForTherapist(therapist);
+      if (search) {
+        rows = rows.filter((row) => {
+          const haystack = `${row.patient.firstName} ${row.patient.lastName} ${row.patient.birthDate} ${row.home.name}`.toLowerCase();
+          return haystack.includes(search);
+        });
+      }
+      listHtml = renderPatientenAlpha(therapist, rows);
+    } else {
+      listHtml = renderPatientenHomeGrouped(therapist, therapist.homes || [], search);
     }
   } else if (tab === "aerzte") {
-    let doctors = getAllDoctorsForTherapist(therapist);
-    if (search) doctors = doctors.filter((d) => d.name.toLowerCase().includes(search));
-
-    listHtml = doctors.length === 0 ? '<p class="muted">Keine Ärzte gefunden.</p>' : doctors.map((d) => `
-      <div class="list-item" data-arzt-name="${esc(d.name)}">
-        <strong>${esc(d.name)}</strong>
-      </div>
-    `).join("");
-
-    const selectedArzt = uiState.selectedArzt[therapist.therapistId];
-    if (selectedArzt) detailHtml = renderDoctorDetail(therapist, selectedArzt);
+    const doctors = getAllDoctorsForTherapist(therapist);
+    listHtml = renderAerzteTab(therapist, doctors, search);
+  } else if (tab === "befreiungen") {
+    listHtml = renderBefreiungenTab(therapist);
   } else if (tab === "kilometer") {
-    detailHtml = renderKilometerTab(therapist);
+    listHtml = renderKilometerTab(therapist);
   } else if (tab === "abgabelisten") {
-    detailHtml = renderAbgabelistenTab(therapist);
+    listHtml = renderAbgabelistenTab(therapist);
+  } else if (tab === "stunden") {
+    listHtml = renderStundenTab(therapist);
   }
 
   return `
     <div class="tab-row">
-      <button class="tabBtn ${tab === "patienten" ? "active" : ""}" data-tab="patienten" data-therapist-id="${esc(therapist.therapistId)}">Einrichtung / Patient</button>
-      <button class="tabBtn ${tab === "aerzte" ? "active" : ""}" data-tab="aerzte" data-therapist-id="${esc(therapist.therapistId)}">Ärzte</button>
+      <button class="tabBtn ${tab === "patienten" ? "active" : ""}" data-tab="patienten">Einrichtung / Patient</button>
+      <button class="tabBtn ${tab === "aerzte" ? "active" : ""}" data-tab="aerzte">Ärzte</button>
+      <button class="tabBtn ${tab === "befreiungen" ? "active" : ""}" data-tab="befreiungen">Befreiungen</button>
     </div>
     <div class="tab-row">
-      <button class="tabBtn ${tab === "kilometer" ? "active" : ""}" data-tab="kilometer" data-therapist-id="${esc(therapist.therapistId)}">Kilometer</button>
-      <button class="tabBtn ${tab === "abgabelisten" ? "active" : ""}" data-tab="abgabelisten" data-therapist-id="${esc(therapist.therapistId)}">Abgabelisten</button>
+      <button class="tabBtn ${tab === "kilometer" ? "active" : ""}" data-tab="kilometer">Kilometer</button>
+      <button class="tabBtn ${tab === "abgabelisten" ? "active" : ""}" data-tab="abgabelisten">Abgabelisten</button>
+      <button class="tabBtn ${tab === "stunden" ? "active" : ""}" data-tab="stunden">Stunden</button>
     </div>
-    ${hasSearch ? `<input type="text" class="searchInput" data-therapist-id="${esc(therapist.therapistId)}" placeholder="Suche..." value="${esc(uiState.searchText[therapist.therapistId] || "")}">` : ""}
-    ${listHtml ? `<div style="margin-top:12px;">${listHtml}</div>` : ""}
-    <div style="margin-top:12px;">${detailHtml}</div>
+    ${extraControlsHtml}
+    ${hasSearch ? `<input type="text" class="searchInput" placeholder="Suche..." value="${esc(uiState.searchText[tid] || "")}">` : ""}
+    <div style="margin-top:12px;">${listHtml}</div>
   `;
 }
 
@@ -693,24 +1149,113 @@ function bindBodyEvents(therapist) {
     };
   }
 
-  body.querySelectorAll("[data-patient-id]").forEach((el) => {
-    el.onclick = () => {
-      uiState.selectedPatient[therapist.therapistId] = el.dataset.patientId;
+  body.querySelectorAll(".groupModeBtn").forEach((btn) => {
+    btn.onclick = () => {
+      uiState.groupMode[therapist.therapistId] = btn.dataset.mode;
       body.innerHTML = renderTherapistBody(therapist);
       bindBodyEvents(therapist);
     };
   });
 
-  body.querySelectorAll("[data-arzt-name]").forEach((el) => {
-    el.onclick = () => {
-      uiState.selectedArzt[therapist.therapistId] = el.dataset.arztName;
+  // Einrichtungen/Patienten/Ärzte klappen jetzt per natives <details> auf -
+  // die Toggle-Listener merken sich nur, welche Accordions offen sind,
+  // damit dieser Zustand einen späteren vollständigen Re-Render (Suche,
+  // Reiterwechsel) übersteht. Der Inhalt selbst ist bereits beim Rendern
+  // vollständig vorhanden (kein Nachladen nötig).
+  body.querySelectorAll("details[data-home-id]").forEach((el) => {
+    el.addEventListener("toggle", () => {
+      const set = getStateSet(uiState.openHomes, therapist.therapistId);
+      if (el.open) set.add(el.dataset.homeId); else set.delete(el.dataset.homeId);
+    });
+  });
+  body.querySelectorAll("details[data-patient-id]").forEach((el) => {
+    el.addEventListener("toggle", () => {
+      const set = getStateSet(uiState.openPatients, therapist.therapistId);
+      if (el.open) set.add(el.dataset.patientId); else set.delete(el.dataset.patientId);
+    });
+  });
+  body.querySelectorAll("details[data-arzt-name]").forEach((el) => {
+    el.addEventListener("toggle", () => {
+      const set = getStateSet(uiState.openArzt, therapist.therapistId);
+      if (el.open) set.add(el.dataset.arztName); else set.delete(el.dataset.arztName);
+    });
+  });
+
+  body.querySelectorAll(".stundenModeBtn").forEach((btn) => {
+    btn.onclick = () => {
+      uiState.stundenMode[therapist.therapistId] = btn.dataset.mode;
       body.innerHTML = renderTherapistBody(therapist);
       bindBodyEvents(therapist);
     };
   });
+
+  const stundenDateInput = body.querySelector(".stundenDateInput");
+  if (stundenDateInput) {
+    bindDeDateAutoFormat(stundenDateInput);
+    stundenDateInput.addEventListener("change", () => {
+      uiState.stundenDate[therapist.therapistId] = stundenDateInput.value.trim();
+      body.innerHTML = renderTherapistBody(therapist);
+      bindBodyEvents(therapist);
+    });
+  }
+  const stundenFromInput = body.querySelector(".stundenFromInput");
+  if (stundenFromInput) {
+    bindDeDateAutoFormat(stundenFromInput);
+    stundenFromInput.addEventListener("change", () => {
+      uiState.stundenFrom[therapist.therapistId] = stundenFromInput.value.trim();
+      body.innerHTML = renderTherapistBody(therapist);
+      bindBodyEvents(therapist);
+    });
+  }
+  const stundenToInput = body.querySelector(".stundenToInput");
+  if (stundenToInput) {
+    bindDeDateAutoFormat(stundenToInput);
+    stundenToInput.addEventListener("change", () => {
+      uiState.stundenTo[therapist.therapistId] = stundenToInput.value.trim();
+      body.innerHTML = renderTherapistBody(therapist);
+      bindBodyEvents(therapist);
+    });
+  }
 }
 
 renderGate();
+
+// Ermöglicht "Zum Desktop hinzufügen" auf Laptop/PC (Chrome/Edge zeigen dafür
+// ein Installieren-Symbol in der Adressleiste, sobald Manifest + Icons + ein
+// registrierter Service Worker vorhanden sind). Bewusst ein reiner
+// Durchreich-Worker OHNE jegliches Caching (kein caches.open/cache.put) -
+// die Haupt-App hatte ihren Service Worker wegen Problemen mit veralteten
+// zwischengespeicherten Ständen bei häufigen Updates wieder entfernt; dieser
+// hier lädt jede Anfrage immer frisch vom Netz und kann daher keine
+// vergleichbaren Update-Probleme verursachen, dient nur der Installierbarkeit.
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("./sw.js", { scope: "./" }).catch(() => {});
+}
+
+// "Aktualisieren"-Button: deregistriert einen eventuell veralteten Service
+// Worker, leert die Cache-Storage (unser eigener Worker legt zwar nichts
+// dort ab, ein älterer Browser-Stand könnte aber noch etwas hinterlassen
+// haben) und lädt die Seite mit einem Cache-Busting-Parameter neu, damit
+// garantiert die neueste, vom Server ausgelieferte Version geladen wird -
+// ein normales Neuladen kann sonst eine im HTTP-Cache liegende ältere
+// index.html erneut anzeigen, ohne dass eine neue Version durchkommt.
+document.getElementById("hardRefreshBtn").onclick = async () => {
+  try {
+    if ("serviceWorker" in navigator) {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(registrations.map((reg) => reg.unregister()));
+    }
+    if ("caches" in window) {
+      const cacheKeys = await caches.keys();
+      await Promise.all(cacheKeys.map((key) => caches.delete(key)));
+    }
+  } catch (err) {
+    console.error("Aktualisieren: Cache/Service Worker konnten nicht vollständig geleert werden:", err);
+  }
+  const url = new URL(window.location.href);
+  url.searchParams.set("_refresh", Date.now().toString());
+  window.location.replace(url.toString());
+};
 </script>
 </body>
 </html>
