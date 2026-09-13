@@ -1911,6 +1911,7 @@ function renderNachbestellLetterHtml(letterData = {}, { versandart = "fax", abho
     post: `
       für unsere gemeinsamen Patientinnen und Patienten bitten wir Sie, folgende Heilmittelverordnungen für Physiotherapie auszustellen und diese per Fax an folgende Nummer zu senden:<br>
       Fax: ${escapeHtml(praxis.fax || '—')}<br>
+      Bitte senden Sie die neue Heilmittelverordnung per Fax an meine Fax-Nummer, damit ich die Therapie ohne Unterbrechung fortsetzen kann.<br>
       Bitte senden Sie die Originale der Verordnungen anschließend per Post an unsere Praxisadresse:<br>
       ${praxisAdresseZeilen}<br>
       Vielen Dank für Ihre Unterstützung.
@@ -4471,6 +4472,7 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
     barthel: {},
     schmerzTyp: "nrs",
     nrs: null,
+    nrsNichtBeurteilbar: false,
     besd: {},
     tug: { sekunden: null, hilfsmittel: "", nichtDurchfuehrbar: false },
     weiche: "",
@@ -4657,8 +4659,11 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
         `).join("")}
       ` : `
         <p>„Wie stark sind Ihre Schmerzen gerade, von 0 bis 10? 0 = kein Schmerz, 10 = schlimmster vorstellbarer Schmerz."</p>
-        <label for="nrsInput">Wert (0–10)</label>
-        <input id="nrsInput" type="number" min="0" max="10" step="1" value="${wizard.nrs ?? ""}">
+        <label class="check-chip" style="justify-content:flex-start; margin-bottom:10px;"><input type="checkbox" id="nrsNichtBeurteilbar" ${wizard.nrsNichtBeurteilbar ? "checked" : ""}> <span>Nicht beurteilbar</span></label>
+        <div id="nrsInputWrap" style="${wizard.nrsNichtBeurteilbar ? "display:none;" : ""}">
+          <label for="nrsInput">Wert (0–10)</label>
+          <input id="nrsInput" type="number" min="0" max="10" step="1" value="${wizard.nrs ?? ""}">
+        </div>
       `}
       <div class="row" style="margin-top:16px;">
         <button id="wizardBack" class="secondary">Zurück</button>
@@ -4667,6 +4672,10 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
       <div id="wizardMsg" class="error"></div>
     `, isBesd ? "besd" : "nrs");
     bindCheckChipToggles(app);
+
+    document.getElementById("nrsNichtBeurteilbar")?.addEventListener("change", (e) => {
+      document.getElementById("nrsInputWrap").style.display = e.target.checked ? "none" : "block";
+    });
 
     document.getElementById("wizardBack").onclick = () => stepBarthel();
     document.getElementById("wizardNext").onclick = () => {
@@ -4683,12 +4692,19 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
         }
         wizard.besd = values;
       } else {
-        const raw = document.getElementById("nrsInput").value.trim();
-        if (raw === "" || Number(raw) < 0 || Number(raw) > 10) {
-          msg.textContent = "Bitte einen Wert zwischen 0 und 10 eingeben.";
-          return;
+        const nichtBeurteilbar = document.getElementById("nrsNichtBeurteilbar").checked;
+        if (nichtBeurteilbar) {
+          wizard.nrs = null;
+          wizard.nrsNichtBeurteilbar = true;
+        } else {
+          const raw = document.getElementById("nrsInput").value.trim();
+          if (raw === "" || Number(raw) < 0 || Number(raw) > 10) {
+            msg.textContent = "Bitte einen Wert zwischen 0 und 10 eingeben oder 'Nicht beurteilbar' ankreuzen.";
+            return;
+          }
+          wizard.nrs = Number(raw);
+          wizard.nrsNichtBeurteilbar = false;
         }
-        wizard.nrs = Number(raw);
       }
       stepTug();
     };
@@ -5219,7 +5235,9 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
     const barthelTotal = Assessment.computeBarthelTotal(wizard.barthel);
     const schmerzLine = wizard.schmerzTyp === "besd"
       ? `BESD: ${Assessment.computeBesdTotal(wizard.besd)}/${Assessment.BESD_MAX} – ${Assessment.classifyBesd(Assessment.computeBesdTotal(wizard.besd))}`
-      : `NRS: ${wizard.nrs}/10 – ${Assessment.classifyNrs(wizard.nrs)}`;
+      : wizard.nrsNichtBeurteilbar
+        ? "NRS: Nicht beurteilbar"
+        : `NRS: ${wizard.nrs}/10 – ${Assessment.classifyNrs(wizard.nrs)}`;
 
     let ebeneSummary = "";
     if (wizard.weiche === "neurologisch") {
@@ -7824,7 +7842,8 @@ export function showFaqView({ onLock }) {
           <tr style="border-bottom:1px solid var(--border);"><th style="text-align:left; padding:6px 4px;">Rezepttyp</th><th style="text-align:left; padding:6px 4px;">Gültigkeit</th></tr>
           <tr style="border-bottom:1px solid var(--border);"><td style="padding:6px 4px;">GKV normal</td><td style="padding:6px 4px;">28 Kalendertage ab Ausstellungsdatum</td></tr>
           <tr style="border-bottom:1px solid var(--border);"><td style="padding:6px 4px;">GKV dringender Bedarf</td><td style="padding:6px 4px;">14 Kalendertage ab Ausstellungsdatum</td></tr>
-          <tr><td style="padding:6px 4px;">BG-Rezept</td><td style="padding:6px 4px;">14 Kalendertage ab Ausstellungsdatum</td></tr>
+          <tr style="border-bottom:1px solid var(--border);"><td style="padding:6px 4px;">BG-Rezept</td><td style="padding:6px 4px;">14 Kalendertage ab Ausstellungsdatum</td></tr>
+          <tr><td style="padding:6px 4px;">Blanko-VO</td><td style="padding:6px 4px;">16 Wochen ab Ausstellungsdatum</td></tr>
         </table>
       </div>
     </details>
@@ -7860,7 +7879,8 @@ export function showFaqView({ onLock }) {
           <tr style="border-bottom:1px solid var(--border);"><th style="text-align:left; padding:6px 4px;">Anzahl Behandlungen</th><th style="text-align:left; padding:6px 4px;">Unterbrechungsfrist</th></tr>
           <tr style="border-bottom:1px solid var(--border);"><td style="padding:6px 4px;">Bis 6 Behandlungen</td><td style="padding:6px 4px;">3 Monate ab erster Behandlung</td></tr>
           <tr style="border-bottom:1px solid var(--border);"><td style="padding:6px 4px;">Mehr als 6 Behandlungen</td><td style="padding:6px 4px;">6 Monate ab erster Behandlung</td></tr>
-          <tr><td style="padding:6px 4px;">BG-Rezept</td><td style="padding:6px 4px;">28 Kalendertage ab Ausstellungsdatum</td></tr>
+          <tr style="border-bottom:1px solid var(--border);"><td style="padding:6px 4px;">BG-Rezept</td><td style="padding:6px 4px;">28 Kalendertage ab Ausstellungsdatum</td></tr>
+          <tr><td style="padding:6px 4px;">Blanko-VO</td><td style="padding:6px 4px;">Keine Regelung</td></tr>
         </table>
       </div>
     </details>
@@ -7873,22 +7893,6 @@ export function showFaqView({ onLock }) {
       <div class="accordion-body">
         <ul style="margin:0; padding-left:20px; line-height:1.7;">
           ${FAQ_CHECKLISTE_ITEMS.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
-        </ul>
-      </div>
-    </details>
-
-    <details class="accordion">
-      <summary>
-        <span>Umgang mit Blanko-Verordnungen</span>
-        <span class="muted">Vom Arzt vorunterschrieben, ohne Angaben</span>
-      </summary>
-      <div class="accordion-body">
-        <ul style="margin:0; padding-left:20px; line-height:1.7;">
-          <li>Eine Blanko-VO ist bereits vom Arzt unterschrieben/gestempelt, aber ohne Diagnose, ICD-10-Code, Heilmittel und Verordnungsmenge.</li>
-          <li>Vor der ersten Behandlung müssen alle Pflichtangaben (siehe Rezept-Checkliste) vollständig eingetragen sein – sonst ist das Rezept ungültig.</li>
-          <li>Die fehlenden Angaben dürfen nur nach Rücksprache mit der Praxis ergänzt werden, niemals eigenmächtig festgelegt werden. Bei Unsicherheit vor der Behandlung telefonisch mit der Arztpraxis abklären.</li>
-          <li>Das Ausstellungsdatum zählt ab dem Tag, an dem der Arzt unterschrieben hat – nicht ab dem Tag der Ergänzung. Die Fristen (siehe oben) laufen daher schon, auch wenn die Angaben erst später eingetragen werden.</li>
-          <li>In der App: Beim Anlegen des Rezepts ganz normal alle Felder ausfüllen, sobald die Angaben von der Praxis feststehen – die Blanko-VO wird technisch wie jedes andere Rezept behandelt.</li>
         </ul>
       </div>
     </details>

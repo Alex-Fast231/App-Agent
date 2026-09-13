@@ -300,7 +300,7 @@ function normalizeAssessment(item) {
         situation: ensureBoolean(orientierungSource.situation, false),
         nicht: ensureBoolean(orientierungSource.nicht, false)
       },
-      gedaechtnis: ensureEnum(ebene0Source.gedaechtnis, ["unauffaellig", "kurzzeit", "langzeit"], ""),
+      gedaechtnis: ensureEnum(ebene0Source.gedaechtnis, ["unauffaellig", "kurzzeit", "langzeit", "nicht_beurteilbar"], ""),
       kommunikation: ensureEnum(ebene0Source.kommunikation, ["verbal", "verbal_eingeschraenkt", "nonverbal", "nicht_moeglich"], ""),
       kooperation: ensureEnum(ebene0Source.kooperation, ["gut", "eingeschraenkt", "nicht_moeglich"], "")
     },
@@ -320,6 +320,7 @@ function normalizeAssessment(item) {
 
     schmerzTyp: ensureEnum(source.schmerzTyp, ["nrs", "besd"], "nrs"),
     nrs: ensureNullableInt(source.nrs, 0, 10),
+    nrsNichtBeurteilbar: ensureBoolean(source.nrsNichtBeurteilbar, false),
     besd: normalizeBesdValues(source.besd),
 
     tug: {

@@ -10,7 +10,8 @@ export const REMINDER_INTERVAL_DAYS = { 3: 90, 6: 180 };
 export const GEDAECHTNIS_OPTIONEN = [
   { val: "unauffaellig", label: "unauffällig" },
   { val: "kurzzeit", label: "Kurzzeitgedächtnis betroffen" },
-  { val: "langzeit", label: "Langzeitgedächtnis betroffen" }
+  { val: "langzeit", label: "Langzeitgedächtnis betroffen" },
+  { val: "nicht_beurteilbar", label: "nicht beurteilbar" }
 ];
 export const KOMMUNIKATION_OPTIONEN = [
   { val: "verbal", label: "verbal unauffällig" },
