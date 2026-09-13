@@ -297,10 +297,11 @@ function normalizeAssessment(item) {
         zeitlich: ensureBoolean(orientierungSource.zeitlich, false),
         oertlich: ensureBoolean(orientierungSource.oertlich, false),
         person: ensureBoolean(orientierungSource.person, false),
-        situation: ensureBoolean(orientierungSource.situation, false)
+        situation: ensureBoolean(orientierungSource.situation, false),
+        nicht: ensureBoolean(orientierungSource.nicht, false)
       },
       gedaechtnis: ensureEnum(ebene0Source.gedaechtnis, ["unauffaellig", "kurzzeit", "langzeit"], ""),
-      kommunikation: ensureEnum(ebene0Source.kommunikation, ["verbal", "verbal_eingeschraenkt", "nonverbal"], ""),
+      kommunikation: ensureEnum(ebene0Source.kommunikation, ["verbal", "verbal_eingeschraenkt", "nonverbal", "nicht_moeglich"], ""),
       kooperation: ensureEnum(ebene0Source.kooperation, ["gut", "eingeschraenkt", "nicht_moeglich"], "")
     },
 
@@ -338,7 +339,8 @@ function normalizeAssessment(item) {
       mrc: {
         position: ensureEnum(mrcNeuroSource.position, ["sitzen", "liegen"], ""),
         gruppen: normalizeMrcGruppen(mrcNeuroSource.gruppen),
-        spastik: ensureEnum(mrcNeuroSource.spastik, ["nein", "links", "rechts", "beidseitig"], "")
+        spastik: ensureEnum(mrcNeuroSource.spastik, ["nein", "links", "rechts", "beidseitig"], ""),
+        nichtDurchfuehrbar: ensureBoolean(mrcNeuroSource.nichtDurchfuehrbar, false)
       }
     },
 
@@ -365,7 +367,8 @@ function normalizeAssessment(item) {
     schwerst: {
       mrc: {
         gruppen: normalizeMrcGruppen(mrcSchwerstSource.gruppen),
-        spastik: ensureEnum(mrcSchwerstSource.spastik, ["nein", "links", "rechts", "beidseitig"], "")
+        spastik: ensureEnum(mrcSchwerstSource.spastik, ["nein", "links", "rechts", "beidseitig"], ""),
+        nichtDurchfuehrbar: ensureBoolean(mrcSchwerstSource.nichtDurchfuehrbar, false)
       },
       kontrakturen: {
         vorhanden: ensureBoolean(kontrakturenSource.vorhanden, false),

@@ -1899,6 +1899,7 @@ function renderNachbestellLetterHtml(letterData = {}, { versandart = "fax", abho
     fax: `
       für unsere gemeinsamen Patientinnen und Patienten bitten wir Sie, folgende Heilmittelverordnungen für Physiotherapie auszustellen und diese per Fax an folgende Nummer zu senden:<br>
       Fax: ${escapeHtml(praxis.fax || '—')}<br>
+      Bitte senden Sie die neue Heilmittelverordnung per Fax an meine Fax-Nummer, damit ich die Therapie ohne Unterbrechung fortsetzen kann.<br>
       Bitte lassen Sie die Originale der Verordnungen anschließend der jeweils unten angegebenen Einrichtung zukommen.<br>
       Vielen Dank für Ihre Unterstützung.
     `,
@@ -4473,9 +4474,9 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
     besd: {},
     tug: { sekunden: null, hilfsmittel: "", nichtDurchfuehrbar: false },
     weiche: "",
-    neuro: { bbs7: {}, rmi: { antworten: [], beobachtung: false }, mrc: { position: patient.assessmentMrcPosition || "", gruppen: {}, spastik: "" } },
+    neuro: { bbs7: {}, rmi: { antworten: [], beobachtung: false }, mrc: { position: patient.assessmentMrcPosition || "", gruppen: {}, spastik: "", nichtDurchfuehrbar: false } },
     ortho: { sppb: { balance: {} }, schmerzLokalisation: { zonen: [], qualitaet: [] }, romAktiv: [] },
-    schwerst: { mrc: { gruppen: {}, spastik: "" }, kontrakturen: { vorhanden: false, liste: [] }, dekubitusrisiko: "", romPassiv: [], schmerzBeiBewegung: false, spastikWiderstand: false }
+    schwerst: { mrc: { gruppen: {}, spastik: "", nichtDurchfuehrbar: false }, kontrakturen: { vorhanden: false, liste: [] }, dekubitusrisiko: "", romPassiv: [], schmerzBeiBewegung: false, spastikWiderstand: false }
   };
   let reviewBackStep = null;
   // Auf Nutzerwunsch: statt immer die komplette Ebene-0/Barthel/Schmerz/TUG-
@@ -4577,6 +4578,7 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
         <label class="check-chip" style="justify-content:flex-start;"><input type="checkbox" id="orOertlich" ${wizard.ebene0.orientierung.oertlich ? "checked" : ""}> <span>örtlich orientiert</span></label>
         <label class="check-chip" style="justify-content:flex-start;"><input type="checkbox" id="orPerson" ${wizard.ebene0.orientierung.person ? "checked" : ""}> <span>zur Person orientiert</span></label>
         <label class="check-chip" style="justify-content:flex-start;"><input type="checkbox" id="orSituation" ${wizard.ebene0.orientierung.situation ? "checked" : ""}> <span>zur Situation orientiert</span></label>
+        <label class="check-chip" style="justify-content:flex-start;"><input type="checkbox" id="orNicht" ${wizard.ebene0.orientierung.nicht ? "checked" : ""}> <span>nicht orientiert</span></label>
       </div>
 
       <h3 style="margin-top:16px;">Gedächtnis</h3>
@@ -4601,7 +4603,8 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
         zeitlich: document.getElementById("orZeitlich").checked,
         oertlich: document.getElementById("orOertlich").checked,
         person: document.getElementById("orPerson").checked,
-        situation: document.getElementById("orSituation").checked
+        situation: document.getElementById("orSituation").checked,
+        nicht: document.getElementById("orNicht").checked
       };
       wizard.ebene0.gedaechtnis = getRadioValue("gedaechtnis");
       wizard.ebene0.kommunikation = getRadioValue("kommunikation");
@@ -4860,22 +4863,28 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
         : renderRadioGroup("mrcPosition", [{ val: "sitzen", label: "Sitzen" }, { val: "liegen", label: "Liegen" }], wizard.neuro.mrc.position)
       }
 
-      ${Assessment.MRC_GRUPPEN.map((g) => `
-        <h4 style="margin-top:14px;">${escapeHtml(g.label)}</h4>
-        <div class="row">
-          <div style="flex:1;">
-            <label>Links</label>
-            ${renderPointGroup(`mrc-${g.key}-links`, [0, 1, 2, 3, 4, 5], wizard.neuro.mrc.gruppen?.[g.key]?.links)}
+      <label class="check-chip" style="justify-content:flex-start; margin-bottom:12px;">
+        <input type="checkbox" id="mrcNichtDurchfuehrbar" ${wizard.neuro.mrc.nichtDurchfuehrbar ? "checked" : ""}>
+        <span>MRC nicht durchführbar (Patient kann Aufforderungen nicht folgen)</span>
+      </label>
+      <div id="mrcGruppenWrap" style="${wizard.neuro.mrc.nichtDurchfuehrbar ? "display:none;" : ""}">
+        ${Assessment.MRC_GRUPPEN.map((g) => `
+          <h4 style="margin-top:14px;">${escapeHtml(g.label)}</h4>
+          <div class="row">
+            <div style="flex:1;">
+              <label>Links</label>
+              ${renderPointGroup(`mrc-${g.key}-links`, [0, 1, 2, 3, 4, 5], wizard.neuro.mrc.gruppen?.[g.key]?.links)}
+            </div>
+            <div style="flex:1;">
+              <label>Rechts</label>
+              ${renderPointGroup(`mrc-${g.key}-rechts`, [0, 1, 2, 3, 4, 5], wizard.neuro.mrc.gruppen?.[g.key]?.rechts)}
+            </div>
           </div>
-          <div style="flex:1;">
-            <label>Rechts</label>
-            ${renderPointGroup(`mrc-${g.key}-rechts`, [0, 1, 2, 3, 4, 5], wizard.neuro.mrc.gruppen?.[g.key]?.rechts)}
-          </div>
-        </div>
-      `).join("")}
+        `).join("")}
 
-      <h4 style="margin-top:14px;">Spastik</h4>
-      ${renderRadioGroup("spastikNeuro", Assessment.SPASTIK_OPTIONEN, wizard.neuro.mrc.spastik)}
+        <h4 style="margin-top:14px;">Spastik</h4>
+        ${renderRadioGroup("spastikNeuro", Assessment.SPASTIK_OPTIONEN, wizard.neuro.mrc.spastik)}
+      </div>
 
       <div class="row" style="margin-top:16px;">
         <button id="wizardBack" class="secondary">Zurück</button>
@@ -4885,6 +4894,10 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
     `, "mrc");
     bindCheckChipToggles(app);
 
+    document.getElementById("mrcNichtDurchfuehrbar").addEventListener("change", (e) => {
+      document.getElementById("mrcGruppenWrap").style.display = e.target.checked ? "none" : "";
+    });
+
     document.getElementById("wizardBack").onclick = () => stepRmi();
     document.getElementById("wizardNext").onclick = () => {
       const msg = document.getElementById("wizardMsg");
@@ -4893,16 +4906,19 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
         msg.textContent = "Bitte eine Testposition auswählen.";
         return;
       }
+      const nichtDurchfuehrbar = document.getElementById("mrcNichtDurchfuehrbar").checked;
       const gruppen = {};
-      Assessment.MRC_GRUPPEN.forEach((g) => {
-        gruppen[g.key] = {
-          links: getRadioValue(`mrc-${g.key}-links`) || null,
-          rechts: getRadioValue(`mrc-${g.key}-rechts`) || null
-        };
-        if (gruppen[g.key].links !== null) gruppen[g.key].links = Number(gruppen[g.key].links);
-        if (gruppen[g.key].rechts !== null) gruppen[g.key].rechts = Number(gruppen[g.key].rechts);
-      });
-      wizard.neuro.mrc = { position, gruppen, spastik: getRadioValue("spastikNeuro") };
+      if (!nichtDurchfuehrbar) {
+        Assessment.MRC_GRUPPEN.forEach((g) => {
+          gruppen[g.key] = {
+            links: getRadioValue(`mrc-${g.key}-links`) || null,
+            rechts: getRadioValue(`mrc-${g.key}-rechts`) || null
+          };
+          if (gruppen[g.key].links !== null) gruppen[g.key].links = Number(gruppen[g.key].links);
+          if (gruppen[g.key].rechts !== null) gruppen[g.key].rechts = Number(gruppen[g.key].rechts);
+        });
+      }
+      wizard.neuro.mrc = { position, gruppen, spastik: nichtDurchfuehrbar ? "" : getRadioValue("spastikNeuro"), nichtDurchfuehrbar };
       reviewBackStep = () => stepMrcNeuro();
       stepReview();
     };
@@ -5046,22 +5062,28 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
   // ---------- Ebene 2c: Schwerstbetroffene ----------
   function stepMrcSchwerst() {
     wizardCard("MRC Scale (im Liegen)", `
-      ${Assessment.MRC_GRUPPEN.map((g) => `
-        <h4 style="margin-top:14px;">${escapeHtml(g.label)}</h4>
-        <div class="row">
-          <div style="flex:1;">
-            <label>Links</label>
-            ${renderPointGroup(`mrcS-${g.key}-links`, [0, 1, 2, 3, 4, 5], wizard.schwerst.mrc.gruppen?.[g.key]?.links)}
+      <label class="check-chip" style="justify-content:flex-start; margin-bottom:12px;">
+        <input type="checkbox" id="mrcSNichtDurchfuehrbar" ${wizard.schwerst.mrc.nichtDurchfuehrbar ? "checked" : ""}>
+        <span>MRC nicht durchführbar (Patient kann Aufforderungen nicht folgen)</span>
+      </label>
+      <div id="mrcSGruppenWrap" style="${wizard.schwerst.mrc.nichtDurchfuehrbar ? "display:none;" : ""}">
+        ${Assessment.MRC_GRUPPEN.map((g) => `
+          <h4 style="margin-top:14px;">${escapeHtml(g.label)}</h4>
+          <div class="row">
+            <div style="flex:1;">
+              <label>Links</label>
+              ${renderPointGroup(`mrcS-${g.key}-links`, [0, 1, 2, 3, 4, 5], wizard.schwerst.mrc.gruppen?.[g.key]?.links)}
+            </div>
+            <div style="flex:1;">
+              <label>Rechts</label>
+              ${renderPointGroup(`mrcS-${g.key}-rechts`, [0, 1, 2, 3, 4, 5], wizard.schwerst.mrc.gruppen?.[g.key]?.rechts)}
+            </div>
           </div>
-          <div style="flex:1;">
-            <label>Rechts</label>
-            ${renderPointGroup(`mrcS-${g.key}-rechts`, [0, 1, 2, 3, 4, 5], wizard.schwerst.mrc.gruppen?.[g.key]?.rechts)}
-          </div>
-        </div>
-      `).join("")}
+        `).join("")}
 
-      <h4 style="margin-top:14px;">Spastik</h4>
-      ${renderRadioGroup("spastikSchwerst", Assessment.SPASTIK_OPTIONEN, wizard.schwerst.mrc.spastik)}
+        <h4 style="margin-top:14px;">Spastik</h4>
+        ${renderRadioGroup("spastikSchwerst", Assessment.SPASTIK_OPTIONEN, wizard.schwerst.mrc.spastik)}
+      </div>
 
       <div class="row" style="margin-top:16px;">
         ${wizard.tug.nichtDurchfuehrbar ? `<button id="wizardBack" class="secondary">Zurück</button>` : `<button id="wizardBack" class="secondary">Zurück</button>`}
@@ -5070,18 +5092,25 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
     `, "mrc");
     bindCheckChipToggles(app);
 
+    document.getElementById("mrcSNichtDurchfuehrbar").addEventListener("change", (e) => {
+      document.getElementById("mrcSGruppenWrap").style.display = e.target.checked ? "none" : "";
+    });
+
     document.getElementById("wizardBack").onclick = () => (usedBranchShortcut ? stepBereichAuswahl() : (wizard.tug.nichtDurchfuehrbar ? stepTug() : stepWeichenscreen()));
     document.getElementById("wizardNext").onclick = () => {
+      const nichtDurchfuehrbar = document.getElementById("mrcSNichtDurchfuehrbar").checked;
       const gruppen = {};
-      Assessment.MRC_GRUPPEN.forEach((g) => {
-        gruppen[g.key] = {
-          links: getRadioValue(`mrcS-${g.key}-links`) || null,
-          rechts: getRadioValue(`mrcS-${g.key}-rechts`) || null
-        };
-        if (gruppen[g.key].links !== null) gruppen[g.key].links = Number(gruppen[g.key].links);
-        if (gruppen[g.key].rechts !== null) gruppen[g.key].rechts = Number(gruppen[g.key].rechts);
-      });
-      wizard.schwerst.mrc = { gruppen, spastik: getRadioValue("spastikSchwerst") };
+      if (!nichtDurchfuehrbar) {
+        Assessment.MRC_GRUPPEN.forEach((g) => {
+          gruppen[g.key] = {
+            links: getRadioValue(`mrcS-${g.key}-links`) || null,
+            rechts: getRadioValue(`mrcS-${g.key}-rechts`) || null
+          };
+          if (gruppen[g.key].links !== null) gruppen[g.key].links = Number(gruppen[g.key].links);
+          if (gruppen[g.key].rechts !== null) gruppen[g.key].rechts = Number(gruppen[g.key].rechts);
+        });
+      }
+      wizard.schwerst.mrc = { gruppen, spastik: nichtDurchfuehrbar ? "" : getRadioValue("spastikSchwerst"), nichtDurchfuehrbar };
       stepKontrakturenDekubitus();
     };
   }
@@ -6727,7 +6756,7 @@ export function showNachbestellungView({ onLock, doctorFilter = "", textFilter =
       <div class="compact-card" style="margin-top:16px;">
         <div style="font-weight:600; margin-bottom:8px;">Zustellung</div>
         ${renderRadioGroup("nachbestellVersandart", [
-          { val: "fax", label: "Per Fax an den Arzt / Original zur Einrichtung" },
+          { val: "fax", label: "Per Fax an mich / Original zur Einrichtung" },
           { val: "abholen", label: "Ich hole die Rezepte selbst ab" },
           { val: "post", label: "Original per Post an die Praxis" }
         ], "fax")}
