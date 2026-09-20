@@ -8988,8 +8988,13 @@ function ensureFastiStyles() {
       display:flex; gap:8px; padding:10px 12px; border-top:1px solid #eee; flex-shrink:0;
       padding-bottom:calc(10px + env(safe-area-inset-bottom, 0px));
     }
-    .fasti-chat-input-row input{ flex:1; padding:8px 10px; border-radius:10px; border:1px solid #dbe3ee; font-size:14px; }
-    .fasti-chat-input-row button{ padding:8px 14px; margin-top:0; }
+    .fasti-chat-input-row input{ flex:1; min-width:0; padding:8px 10px; border-radius:10px; border:1px solid #dbe3ee; font-size:14px; }
+    /* Ohne explizites width/flex hier gewinnt die globale "button{ width:100% }"-Regel
+       (siehe index.html) gegen das Eingabefeld: der Button beansprucht als Flex-Item
+       ohne eigenes flex-basis seine volle width:100% als Basisgröße, wodurch für das
+       Eingabefeld (flex:1, flex-basis:0) kaum noch Platz übrig bleibt - es schrumpft
+       auf einen winzigen Kreis statt der erwarteten Zeile. */
+    .fasti-chat-input-row button{ flex:0 0 auto; width:auto; padding:8px 14px; margin-top:0; white-space:nowrap; }
 
     /* [hidden] hat dieselbe CSS-Spezifität wie eine Klasse - ohne diese
        Regel würde z.B. ".fasti-badge{ display:flex }" das hidden-Attribut
