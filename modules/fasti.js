@@ -657,9 +657,35 @@ function answerZuzahlungIntent(data, textLower, patientMatch) {
     return { reply: `Nicht befreit / ungeklärt (${rows.length}):\n${rows.map((r) => `- ${r}`).join("\n")}` };
   }
 
-  const faellig = getFaelligeZuzahlungErinnerungen(data);
-  if (faellig.length === 0) return { reply: "Keine offenen Zuzahlungs-Erinnerungen." };
-  return { reply: `Offene Zuzahlungs-Erinnerungen (${faellig.length}):\n${faellig.map((f) => `- ${f.patientName}`).join("\n")}` };
+  if (textLower.includes("erinnerung")) {
+    const faellig = getFaelligeZuzahlungErinnerungen(data);
+    if (faellig.length === 0) return { reply: "Keine offenen Zuzahlungs-Erinnerungen." };
+    return { reply: `Offene Zuzahlungs-Erinnerungen (${faellig.length}):\n${faellig.map((f) => `- ${f.patientName}`).join("\n")}` };
+  }
+
+  // Standardfall bei einem bloßen Stichwort ohne Patientennamen und ohne
+  // "nicht befreit"/"erinnerung"-Zusatz (z.B. einfach "Zuzahlungsstatus" oder
+  // "Zuzahlungsbefreiung" eingetippt) - dann beide Gruppen zusammen auflisten,
+  // statt nur die enger gefasste Erinnerungs-Liste zu zeigen.
+  const befreitRows = [];
+  const nichtBefreitRows = [];
+  (data.homes || []).forEach((home) => (home.patients || []).forEach((patient) => {
+    if (patient.verstorben) return;
+    if (patient.zuzahlungsstatus === "ja") {
+      befreitRows.push(fullPatientName(patient));
+    } else {
+      nichtBefreitRows.push(`${fullPatientName(patient)} (${zuzahlungLabel(patient.zuzahlungsstatus)})`);
+    }
+  }));
+
+  if (befreitRows.length === 0 && nichtBefreitRows.length === 0) {
+    return { reply: "Es sind noch keine Patienten erfasst." };
+  }
+
+  const teile = [];
+  teile.push(`Befreit (${befreitRows.length}):${befreitRows.length ? "\n" + befreitRows.map((r) => `- ${r}`).join("\n") : " —"}`);
+  teile.push(`Nicht befreit / ungeklärt (${nichtBefreitRows.length}):${nichtBefreitRows.length ? "\n" + nichtBefreitRows.map((r) => `- ${r}`).join("\n") : " —"}`);
+  return { reply: teile.join("\n\n") };
 }
 
 function answerFristIntent(data, patientMatch) {

@@ -100,7 +100,7 @@ import {
   markBackupReminderHandled,
   markBackupReminderPostponed
 } from "../modules/backupReminder.js";
-import { answerFastiChat, executeFastiAction, resumeFastiChoice, startNachbestellungVorschlag } from "../modules/fasti.js";
+import { answerFastiChat, executeFastiAction, resumeFastiChoice, startNachbestellungVorschlag, buildFastiNotices } from "../modules/fasti.js";
 import { generateId, formatPatientName } from "../core/utils.js";
 import {
   normalizeDeDateInput,
@@ -2646,6 +2646,10 @@ export function showSettingsView({ onLock }) {
       <input id="settingsJahresurlaubTage" type="text" inputmode="numeric" autocomplete="off" value="${escapeHtml(String(settings.jahresurlaubTage || 0))}" placeholder="z. B. 30">
       <p class="muted">Wird für das Urlaubskonto von FaSti verwendet (Anspruch minus genommene Urlaubstage).</p>
 
+      <h3 style="margin-top:20px;">FaSti</h3>
+      <label class="check-chip"><input id="settingsFastiEnabled" type="checkbox" ${settings.fastiEnabled !== false ? "checked" : ""}> <span>FaSti aktiviert</span></label>
+      <p class="muted">Schaltet den FaSti-Assistenten (Button, Hinweise, Chat) komplett ein oder aus. Wirkt sofort nach dem Speichern, ohne erneutes Einloggen. Standardmäßig aktiviert.</p>
+
       <h3 style="margin-top:20px;">Zertifikate</h3>
       <p class="muted">Wird für die Rezeptoptimierung (Vorschläge nur für zertifizierte Heilmittel) verwendet.</p>
       <div class="checkbox-row">
@@ -2694,6 +2698,7 @@ export function showSettingsView({ onLock }) {
     const stundenStartsaldoMinuten = parseStundenStartsaldoInput(document.getElementById("settingsStundenStartsaldo").value);
     const jahresurlaubTageInput = document.getElementById("settingsJahresurlaubTage").value.trim();
     const jahresurlaubTage = jahresurlaubTageInput === "" ? 0 : Number(jahresurlaubTageInput);
+    const fastiEnabled = document.getElementById("settingsFastiEnabled").checked;
     const zertifikate = {
       mt: document.getElementById("zertMt").checked,
       mld: document.getElementById("zertMld").checked,
@@ -2737,6 +2742,7 @@ export function showSettingsView({ onLock }) {
         data.settings.fastStartDatum = fastStartDatum;
         data.settings.stundenStartsaldoMinuten = stundenStartsaldoMinuten;
         data.settings.jahresurlaubTage = jahresurlaubTage;
+        data.settings.fastiEnabled = fastiEnabled;
         data.settings.zertifikate = zertifikate;
         data.settings.buero = { email: bueroEmail };
         data.settings.assessmentIntervalMonths = assessmentIntervalMonths;
@@ -2744,6 +2750,16 @@ export function showSettingsView({ onLock }) {
       });
 
       await queuePersistRuntimeData();
+
+      // Sofort wirksam machen, ohne dass ein erneutes Ein-/Ausloggen nötig
+      // ist - "aus" blendet Button+Panel sofort aus, "an" baut sie (falls
+      // gerade deaktiviert) mit frisch berechneten Hinweisen wieder auf.
+      if (fastiEnabled) {
+        showFastiNotices(buildFastiNotices(getRuntimeData()));
+      } else {
+        hideFastiWidget();
+      }
+
       msg.className = "success";
       msg.textContent = "Einstellungen gespeichert.";
     } catch (err) {
@@ -8951,8 +8967,10 @@ function ensureFastiStyles() {
       position:fixed; right:18px; bottom:calc(18px + env(safe-area-inset-bottom, 0px));
       width:58px; height:58px; border-radius:50%; background:#fff;
       border:2px solid var(--fasti-color); box-shadow:0 6px 18px rgba(15,23,42,0.28);
-      display:flex; align-items:center; justify-content:center; cursor:pointer; z-index:9990;
+      display:flex; align-items:center; justify-content:center; cursor:grab; z-index:9990;
+      touch-action:none; user-select:none;
     }
+    .fasti-btn:active{ cursor:grabbing; }
     .fasti-btn svg{ width:32px; height:52px; overflow:visible; }
     .fasti-badge{
       position:absolute; top:-4px; right:-4px; min-width:20px; height:20px; padding:0 5px;
@@ -8968,10 +8986,16 @@ function ensureFastiStyles() {
     }
     .fasti-panel-header{
       background:var(--fasti-color); color:#fff; padding:12px 14px; font-weight:700;
-      display:flex; justify-content:space-between; align-items:center; flex-shrink:0;
+      display:flex; justify-content:space-between; align-items:center; flex-shrink:0; gap:8px;
     }
-    .fasti-close-btn{ background:transparent; border:none; color:#fff; font-size:18px; line-height:1; cursor:pointer; padding:2px 4px; }
-    .fasti-notices{ padding:10px 12px; border-bottom:1px solid #eee; max-height:220px; overflow-y:auto; flex-shrink:0; }
+    .fasti-header-actions{ display:flex; align-items:center; gap:8px; flex-shrink:0; }
+    .fasti-dismiss-all-btn{
+      background:rgba(255,255,255,0.16); border:1px solid rgba(255,255,255,0.55); color:#fff;
+      font-size:11px; font-weight:600; padding:5px 9px; border-radius:8px; cursor:pointer;
+      white-space:nowrap; width:auto; margin-top:0;
+    }
+    .fasti-close-btn{ background:transparent; border:none; color:#fff; font-size:18px; line-height:1; cursor:pointer; padding:2px 4px; width:auto; margin-top:0; }
+    .fasti-notices{ padding:10px 12px; border-bottom:1px solid #eee; height:220px; max-height:60vh; overflow-y:auto; flex-shrink:0; }
     .fasti-notice{ border-radius:10px; padding:8px 10px; margin-bottom:8px; font-size:13px; line-height:1.4; }
     .fasti-notice:last-child{ margin-bottom:0; }
     .fasti-notice.rot{ background:#fee2e2; color:#991b1b; }
@@ -8979,6 +9003,14 @@ function ensureFastiStyles() {
     .fasti-notice.gelb{ background:#fef9c3; color:#854d0e; }
     .fasti-notice-actions{ margin-top:6px; display:flex; gap:6px; flex-wrap:wrap; }
     .fasti-notice-actions button{ font-size:12px; padding:5px 10px; margin-top:0; }
+    .fasti-notices-resizer{
+      height:12px; flex-shrink:0; background:#f8fafc; border-bottom:1px solid #eee;
+      cursor:row-resize; touch-action:none; position:relative;
+    }
+    .fasti-notices-resizer::after{
+      content:""; position:absolute; left:50%; top:50%; width:36px; height:4px;
+      transform:translate(-50%,-50%); border-radius:2px; background:#cbd5e1;
+    }
     .fasti-chat-log{ flex:1; overflow-y:auto; padding:10px 12px; display:flex; flex-direction:column; gap:8px; min-height:70px; }
     .fasti-msg{ max-width:88%; padding:8px 10px; border-radius:12px; font-size:13px; white-space:pre-line; line-height:1.4; }
     .fasti-msg.user{ align-self:flex-end; background:var(--primary,#2563eb); color:#fff; }
@@ -9049,17 +9081,22 @@ function fastiActionLabel(action) {
   return "Bestätigen";
 }
 
+// Jede Meldung bekommt IMMER einen "Ignorieren"-Button, unabhängig davon, ob
+// zusätzlich eine Aktion (z.B. "Nachbestellzettel vorbereiten") möglich ist -
+// vorher fehlte der Dismiss-Button komplett bei Meldungen ohne Aktion (z.B.
+// die orangen Fristen-/Assessment-Hinweise), die dadurch nicht einzeln
+// ignorierbar waren.
 function renderFastiNoticeItem(notice) {
-  const actionHtml = notice.action ? `
-    <div class="fasti-notice-actions">
-      <button class="fastiNoticeConfirmBtn" data-notice-id="${escapeHtml(notice.id)}">${escapeHtml(fastiActionLabel(notice.action))}</button>
-      <button class="secondary fastiNoticeDismissBtn" data-notice-id="${escapeHtml(notice.id)}">Ignorieren</button>
-    </div>
-  ` : "";
+  const confirmHtml = notice.action
+    ? `<button class="fastiNoticeConfirmBtn" data-notice-id="${escapeHtml(notice.id)}">${escapeHtml(fastiActionLabel(notice.action))}</button>`
+    : "";
   return `
     <div class="fasti-notice ${escapeHtml(notice.priority)}" data-notice-id="${escapeHtml(notice.id)}">
       <div>${escapeHtml(notice.text)}</div>
-      ${actionHtml}
+      <div class="fasti-notice-actions">
+        ${confirmHtml}
+        <button class="secondary fastiNoticeDismissBtn" data-notice-id="${escapeHtml(notice.id)}">Ignorieren</button>
+      </div>
     </div>
   `;
 }
@@ -9105,8 +9142,8 @@ function removeFastiNotice(noticeId) {
 
   if (fastiCurrentNotices.length === 0) {
     badge.hidden = true;
-    noticesEl.hidden = true;
     noticesEl.innerHTML = "";
+    setFastiNoticesVisible(false);
   } else {
     badge.textContent = String(fastiCurrentNotices.length);
     noticesEl.innerHTML = fastiCurrentNotices.map(renderFastiNoticeItem).join("");
@@ -9351,6 +9388,177 @@ function handleFastiSend() {
   handleFastiResult(result);
 }
 
+// Geräteweite Anzeige-Präferenzen (Button-Position, Meldungen-Höhe) - bewusst
+// in localStorage statt in den synchronisierten App-Daten, da es sich um
+// reine Display-Einstellungen dieses einen Geräts/Browsers handelt, keine
+// Praxisdaten.
+const FASTI_BTN_POS_KEY = "fastiBtnPos";
+const FASTI_NOTICES_HEIGHT_KEY = "fastiNoticesHeight";
+const FASTI_NOTICES_MIN_HEIGHT = 60;
+const FASTI_NOTICES_MAX_HEIGHT = 420;
+let fastiBtnHasCustomPos = false;
+
+function clampFastiBtnPos(x, y, btn) {
+  const margin = 4;
+  const w = btn.offsetWidth || 58;
+  const h = btn.offsetHeight || 58;
+  const maxX = Math.max(margin, window.innerWidth - w - margin);
+  const maxY = Math.max(margin, window.innerHeight - h - margin);
+  return { x: Math.min(Math.max(x, margin), maxX), y: Math.min(Math.max(y, margin), maxY) };
+}
+
+function applyFastiBtnPos(btn, x, y) {
+  btn.style.left = `${x}px`;
+  btn.style.top = `${y}px`;
+  btn.style.right = "auto";
+  btn.style.bottom = "auto";
+}
+
+// Macht den FaSti-Button per Zeigereingabe (Maus/Touch) frei verschiebbar.
+// Ein Tap (kein nennenswertes Verschieben) öffnet weiterhin das Panel über
+// onTap() - es gibt bewusst KEINEN separaten "click"-Listener mehr, um nicht
+// doppelt (Drag-Ende UND Klick) zu reagieren.
+function makeFastiButtonDraggable(btn, onTap) {
+  try {
+    const raw = localStorage.getItem(FASTI_BTN_POS_KEY);
+    if (raw) {
+      const pos = JSON.parse(raw);
+      if (Number.isFinite(pos?.x) && Number.isFinite(pos?.y)) {
+        const clamped = clampFastiBtnPos(pos.x, pos.y, btn);
+        applyFastiBtnPos(btn, clamped.x, clamped.y);
+        fastiBtnHasCustomPos = true;
+      }
+    }
+  } catch {}
+
+  let dragging = false;
+  let moved = false;
+  let startClientX = 0;
+  let startClientY = 0;
+  let startLeft = 0;
+  let startTop = 0;
+
+  btn.addEventListener("pointerdown", (e) => {
+    dragging = true;
+    moved = false;
+    const rect = btn.getBoundingClientRect();
+    startClientX = e.clientX;
+    startClientY = e.clientY;
+    startLeft = rect.left;
+    startTop = rect.top;
+    try { btn.setPointerCapture(e.pointerId); } catch {}
+  });
+
+  btn.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    const dx = e.clientX - startClientX;
+    const dy = e.clientY - startClientY;
+    if (!moved && (Math.abs(dx) > 6 || Math.abs(dy) > 6)) moved = true;
+    if (moved) {
+      const clamped = clampFastiBtnPos(startLeft + dx, startTop + dy, btn);
+      applyFastiBtnPos(btn, clamped.x, clamped.y);
+    }
+  });
+
+  function endDrag(e) {
+    if (!dragging) return;
+    dragging = false;
+    if (moved) {
+      fastiBtnHasCustomPos = true;
+      const rect = btn.getBoundingClientRect();
+      try { localStorage.setItem(FASTI_BTN_POS_KEY, JSON.stringify({ x: rect.left, y: rect.top })); } catch {}
+    } else {
+      onTap();
+    }
+    try { btn.releasePointerCapture(e.pointerId); } catch {}
+  }
+
+  btn.addEventListener("pointerup", endDrag);
+  btn.addEventListener("pointercancel", endDrag);
+
+  // Nur re-clampen, wenn der Nutzer den Button zuvor bewusst verschoben hat -
+  // sonst bliebe die normale rechts/unten-Standardposition unnötig angetastet.
+  window.addEventListener("resize", () => {
+    if (!fastiBtnHasCustomPos) return;
+    const rect = btn.getBoundingClientRect();
+    const clamped = clampFastiBtnPos(rect.left, rect.top, btn);
+    applyFastiBtnPos(btn, clamped.x, clamped.y);
+  });
+}
+
+function clampFastiNoticesHeight(h) {
+  return Math.min(FASTI_NOTICES_MAX_HEIGHT, Math.max(FASTI_NOTICES_MIN_HEIGHT, h));
+}
+
+function applyFastiNoticesHeight(h) {
+  const noticesEl = document.getElementById("fastiNotices");
+  if (noticesEl) noticesEl.style.height = `${h}px`;
+}
+
+// Macht die Trennlinie zwischen Meldungen und Chat-Verlauf per Zeigereingabe
+// höhenverstellbar, damit wahlweise mehr Meldungen oder mehr Chat sichtbar
+// ist - die gewählte Höhe wird geräteweit gemerkt (siehe FASTI_NOTICES_HEIGHT_KEY).
+function makeFastiNoticesResizable() {
+  const resizer = document.getElementById("fastiNoticesResizer");
+  const noticesEl = document.getElementById("fastiNotices");
+  if (!resizer || !noticesEl) return;
+
+  try {
+    const raw = localStorage.getItem(FASTI_NOTICES_HEIGHT_KEY);
+    if (raw) applyFastiNoticesHeight(clampFastiNoticesHeight(Number(raw)));
+  } catch {}
+
+  let dragging = false;
+  let startY = 0;
+  let startHeight = 0;
+
+  resizer.addEventListener("pointerdown", (e) => {
+    dragging = true;
+    startY = e.clientY;
+    startHeight = noticesEl.getBoundingClientRect().height;
+    try { resizer.setPointerCapture(e.pointerId); } catch {}
+  });
+
+  resizer.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    applyFastiNoticesHeight(clampFastiNoticesHeight(startHeight + (e.clientY - startY)));
+  });
+
+  function endResize(e) {
+    if (!dragging) return;
+    dragging = false;
+    const h = Math.round(noticesEl.getBoundingClientRect().height);
+    try { localStorage.setItem(FASTI_NOTICES_HEIGHT_KEY, String(h)); } catch {}
+    try { resizer.releasePointerCapture(e.pointerId); } catch {}
+  }
+
+  resizer.addEventListener("pointerup", endResize);
+  resizer.addEventListener("pointercancel", endResize);
+}
+
+// Blendet Meldungsliste, Resize-Griff und "Alle Meldungen aus"-Button
+// gemeinsam ein/aus - die drei gehören immer zusammen (kein Sinn, den
+// Resize-Griff zu zeigen, wenn es nichts zum Anzeigen gibt).
+function setFastiNoticesVisible(visible) {
+  const noticesEl = document.getElementById("fastiNotices");
+  const resizer = document.getElementById("fastiNoticesResizer");
+  const dismissAllBtn = document.getElementById("fastiDismissAllBtn");
+  if (noticesEl) noticesEl.hidden = !visible;
+  if (resizer) resizer.hidden = !visible;
+  if (dismissAllBtn) dismissAllBtn.hidden = !visible;
+}
+
+// Verwirft auf einen Schlag alle aktuell angezeigten Hinweise (Button im
+// grünen Header) - Pendant zum einzelnen "Ignorieren" pro Meldung.
+function dismissAllFastiNotices() {
+  fastiCurrentNotices = [];
+  const badge = document.getElementById("fastiBadge");
+  const noticesEl = document.getElementById("fastiNotices");
+  if (badge) badge.hidden = true;
+  if (noticesEl) noticesEl.innerHTML = "";
+  setFastiNoticesVisible(false);
+}
+
 function ensureFastiWidget() {
   ensureFastiStyles();
   if (document.getElementById("fastiWidgetBtn")) return;
@@ -9360,8 +9568,8 @@ function ensureFastiWidget() {
   btn.className = "fasti-btn";
   btn.hidden = true;
   btn.innerHTML = `${FASTI_SVG}<span id="fastiBadge" class="fasti-badge" hidden>0</span>`;
-  btn.addEventListener("click", () => toggleFastiPanel());
   document.body.appendChild(btn);
+  makeFastiButtonDraggable(btn, () => toggleFastiPanel());
 
   const panel = document.createElement("div");
   panel.id = "fastiPanel";
@@ -9370,9 +9578,13 @@ function ensureFastiWidget() {
   panel.innerHTML = `
     <div class="fasti-panel-header">
       <span>FaSti</span>
-      <button id="fastiCloseBtn" class="fasti-close-btn" aria-label="Schließen">✕</button>
+      <div class="fasti-header-actions">
+        <button id="fastiDismissAllBtn" class="fasti-dismiss-all-btn" hidden>Alle Meldungen aus</button>
+        <button id="fastiCloseBtn" class="fasti-close-btn" aria-label="Schließen">✕</button>
+      </div>
     </div>
     <div id="fastiNotices" class="fasti-notices" hidden></div>
+    <div id="fastiNoticesResizer" class="fasti-notices-resizer" hidden></div>
     <div id="fastiChatLog" class="fasti-chat-log"></div>
     <div class="fasti-chat-input-row">
       <input id="fastiChatInput" type="text" placeholder="Frag FaSti…" autocomplete="off">
@@ -9382,15 +9594,20 @@ function ensureFastiWidget() {
   document.body.appendChild(panel);
 
   document.getElementById("fastiCloseBtn").onclick = () => setFastiPanelOpen(false);
+  document.getElementById("fastiDismissAllBtn").onclick = () => dismissAllFastiNotices();
   document.getElementById("fastiSendBtn").onclick = handleFastiSend;
   document.getElementById("fastiChatInput").addEventListener("keydown", (e) => {
     if (e.key === "Enter") handleFastiSend();
   });
+  makeFastiNoticesResizable();
 }
 
 // Von core/boot.js nach dem Login mit den frisch berechneten Hinweisen
-// (modules/fasti.js: buildFastiNotices()) aufzurufen. Öffnet das Panel
-// automatisch und spielt die Aufwach-Animation ab, sobald Hinweise da sind.
+// (modules/fasti.js: buildFastiNotices()) aufzurufen. Das Chat-Panel bleibt
+// dabei bewusst GESCHLOSSEN (Nutzer-Feedback: "Chatfenster soll beim Start
+// der App geschlossen sein") - nur der Button + Badge werden gezeigt, die
+// Aufwach-Animation macht kurz auf neue Hinweise aufmerksam, ohne das Panel
+// aufzudrängen. Der Nutzer öffnet es bei Bedarf selbst per Klick/Tap.
 export function showFastiNotices(notices) {
   ensureFastiWidget();
   document.getElementById("fastiWidgetBtn").hidden = false;
@@ -9402,19 +9619,18 @@ export function showFastiNotices(notices) {
 
   if (fastiCurrentNotices.length === 0) {
     badge.hidden = true;
-    noticesEl.hidden = true;
     noticesEl.innerHTML = "";
+    setFastiNoticesVisible(false);
     return;
   }
 
   badge.hidden = false;
   badge.textContent = String(fastiCurrentNotices.length);
-  noticesEl.hidden = false;
   noticesEl.innerHTML = fastiCurrentNotices.map(renderFastiNoticeItem).join("");
+  setFastiNoticesVisible(true);
   bindFastiNoticeButtons();
 
   setFastiAnimation("aufwachen");
-  setFastiPanelOpen(true);
 }
 
 // Von core/boot.js beim Sperren aufzurufen: blendet das Widget nicht nur
@@ -9434,7 +9650,8 @@ export function hideFastiWidget() {
   const log = document.getElementById("fastiChatLog");
   if (log) log.innerHTML = "";
   const noticesEl = document.getElementById("fastiNotices");
-  if (noticesEl) { noticesEl.innerHTML = ""; noticesEl.hidden = true; }
+  if (noticesEl) noticesEl.innerHTML = "";
+  setFastiNoticesVisible(false);
   const badge = document.getElementById("fastiBadge");
   if (badge) badge.hidden = true;
 }

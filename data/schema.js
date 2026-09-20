@@ -31,6 +31,7 @@ export function createEmptyAppData() {
       fastStartDatum: "",
       stundenStartsaldoMinuten: 0,
       jahresurlaubTage: 0,
+      fastiEnabled: true,
       zertifikate: {
         kgzns: false,
         mt: false,

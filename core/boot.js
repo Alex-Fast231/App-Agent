@@ -118,6 +118,13 @@ function initiateFasti() {
     return;
   }
 
+  // Einstellungen -> "FaSti An/Aus" (Standard: an). Bei "aus" wird das
+  // Widget nicht einmal aufgebaut/angezeigt - nicht nur das Panel verborgen.
+  if (runtimeData.settings?.fastiEnabled === false) {
+    hideFastiWidget();
+    return;
+  }
+
   const notices = buildFastiNotices(runtimeData);
   if (notices.some((notice) => notice.markShownOnDisplay)) {
     markWeeklySummaryShown();
