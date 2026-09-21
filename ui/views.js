@@ -55,7 +55,6 @@ import {
   deleteRezeptTimeEntry,
   getRezeptTimeEntries,
   getRezeptTimeSummary,
-  getRezeptEntryAutoMinutes,
   saveKilometerStartPoint,
   saveKnownKilometerRoute,
   getKilometerOverview,
@@ -1732,6 +1731,65 @@ export function showBackupReminderModal({ onDone } = {}) {
   };
 }
 
+// Ersetzt ein früheres window.prompt() für "Assessment verschieben" (Dashboard,
+// Bereich 3) - ein natives Browser-Prompt kann keine TT.MM.JJJJ-Auto-Formatierung
+// bekommen (bindDateAutoFormat setzt auf echte <input>-Events), deshalb ein
+// kleines eigenes Modal nach demselben Muster wie showBackupReminderModal().
+function showAssessmentVerschiebenModal({ homeId, patientId, onDone }) {
+  document.getElementById("assessmentVerschiebenOverlay")?.remove();
+
+  const overlay = document.createElement("div");
+  overlay.id = "assessmentVerschiebenOverlay";
+  overlay.style.cssText = "position:fixed; inset:0; background:rgba(15,23,42,0.55); z-index:9998; display:flex; align-items:center; justify-content:center; padding:16px;";
+  overlay.innerHTML = `
+    <div class="card" style="max-width:380px; width:100%; margin:0;">
+      <h3>Assessment verschieben</h3>
+      <label for="assessmentVerschiebenDatum">Neues Datum</label>
+      <input id="assessmentVerschiebenDatum" type="text" inputmode="numeric" placeholder="TT.MM.JJJJ" autocomplete="off">
+      <div id="assessmentVerschiebenMsg" class="error" style="margin-top:8px;"></div>
+      <div class="row" style="margin-top:16px;">
+        <button id="assessmentVerschiebenSaveBtn" style="margin-top:0;">Speichern</button>
+        <button id="assessmentVerschiebenCancelBtn" class="secondary" style="margin-top:0;">Abbrechen</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const input = document.getElementById("assessmentVerschiebenDatum");
+  bindDateAutoFormat(input);
+  input.focus();
+
+  function close() {
+    overlay.remove();
+  }
+
+  document.getElementById("assessmentVerschiebenCancelBtn").onclick = close;
+
+  async function save() {
+    const msg = document.getElementById("assessmentVerschiebenMsg");
+    msg.textContent = "";
+    const parsed = parseDeDate(input.value.trim());
+    if (!parsed) {
+      msg.textContent = "Bitte ein gültiges Datum im Format TT.MM.JJJJ eingeben.";
+      return;
+    }
+    try {
+      scheduleAssessment(homeId, patientId, parsed);
+      await queuePersistRuntimeData();
+      close();
+      if (onDone) onDone();
+    } catch (err) {
+      console.error(err);
+      msg.textContent = err?.message || "Termin konnte nicht verschoben werden.";
+    }
+  }
+
+  document.getElementById("assessmentVerschiebenSaveBtn").onclick = save;
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") save();
+  });
+}
+
 function openHtmlDocument(title, bodyHtml, { autoPrint = false } = {}) {
   const win = window.open("", "_blank", "width=900,height=700");
   if (!win) {
@@ -3122,22 +3180,12 @@ export function showDashboardView({ onLock, keepOverviewOpen = false } = {}) {
   });
 
   document.querySelectorAll(".assessmentVerschiebenBtn").forEach((btn) => {
-    btn.onclick = async () => {
-      const neuesDatum = window.prompt("Assessment auf welches Datum verschieben? (TT.MM.JJJJ)", "");
-      if (neuesDatum === null) return;
-      const parsed = parseDeDate(neuesDatum);
-      if (!parsed) {
-        alert("Bitte ein gültiges Datum im Format TT.MM.JJJJ eingeben.");
-        return;
-      }
-      try {
-        scheduleAssessment(btn.dataset.homeId, btn.dataset.patientId, parsed);
-        await queuePersistRuntimeData();
-        showDashboardView({ onLock });
-      } catch (err) {
-        console.error(err);
-        alert(err?.message || "Termin konnte nicht verschoben werden.");
-      }
+    btn.onclick = () => {
+      showAssessmentVerschiebenModal({
+        homeId: btn.dataset.homeId,
+        patientId: btn.dataset.patientId,
+        onDone: () => showDashboardView({ onLock })
+      });
     };
   });
 
@@ -3509,6 +3557,7 @@ export function showHomeDetailView({ onLock, homeId, searchText = "" }) {
                 <div style="margin-bottom:10px;">
                   ${patient.befreit ? `<span class="pill">Befreit</span>` : ""}
                   ${patient.verstorben ? `<span class="pill-red">Verstorben</span>` : ""}
+                  ${patient.ausgeschieden ? `<span class="pill-gray">Ausgeschieden</span>` : ""}
                 </div>
 
                 <div class="inline-action-stack" style="margin-bottom:10px;">
@@ -3602,7 +3651,9 @@ export function showHomeDetailView({ onLock, homeId, searchText = "" }) {
 
                   <div class="checkbox-row">
                     <label class="check-chip"><input id="edit-verstorben-${patient.patientId}" type="checkbox" ${patient.verstorben ? "checked" : ""}> <span>Verstorben</span></label>
+                    <label class="check-chip"><input id="edit-ausgeschieden-${patient.patientId}" type="checkbox" ${patient.ausgeschieden ? "checked" : ""}> <span>Ausgeschieden</span></label>
                   </div>
+                  <p class="muted">"Ausgeschieden" löscht den Patienten nicht, gilt aber nicht mehr als aktiv - keine Nachbestellungs-, Zuzahlungs- oder Assessment-Erinnerungen mehr.</p>
 
                   <label for="edit-zuzahlungsstatus-${patient.patientId}">Zuzahlungsstatus</label>
                   ${renderZuzahlungsstatusSelect(`edit-zuzahlungsstatus-${patient.patientId}`, patient.zuzahlungsstatus || "")}
@@ -3748,7 +3799,8 @@ export function showHomeDetailView({ onLock, homeId, searchText = "" }) {
           firstName: document.getElementById(`edit-firstName-${patientId}`).value.trim(),
           lastName: document.getElementById(`edit-lastName-${patientId}`).value.trim(),
           birthDate: document.getElementById(`edit-birthDate-${patientId}`).value.trim(),
-          verstorben: document.getElementById(`edit-verstorben-${patientId}`).checked
+          verstorben: document.getElementById(`edit-verstorben-${patientId}`).checked,
+          ausgeschieden: document.getElementById(`edit-ausgeschieden-${patientId}`).checked
         });
 
         const currentPatient = getPatientById(getHomeById(getRuntimeData(), homeId), patientId);
@@ -5571,6 +5623,7 @@ export function showPatientDetailView({ onLock, homeId, patientId, returnTo = nu
         <p><strong>Geburtsdatum:</strong> ${escapeHtml(patient.birthDate || "—")}</p>
         <p><strong>Befreit:</strong> ${patient.befreit ? "Ja" : "Nein"}</p>
         <p><strong>Verstorben:</strong> ${patient.verstorben ? "Ja" : "Nein"}</p>
+        <p><strong>Ausgeschieden:</strong> ${patient.ausgeschieden ? "Ja" : "Nein"}</p>
         <button id="deletePatientBtn" class="danger" style="margin-top:16px; width:100%;">Patient löschen</button>
       </div>
     </details>
@@ -6271,7 +6324,6 @@ export function showRezeptDetailView({ onLock, homeId, patientId, rezeptId, retu
           <div class="card" style="margin-bottom:12px;padding:16px;">
             <p><strong>${escapeHtml(entry.date || "Ohne Datum")}</strong></p>
             <p>${escapeHtml(entry.text || "")}</p>
-            <p class="muted">Automatische Zeit: ${escapeHtml(formatMinutesLabel(getRezeptEntryAutoMinutes(rezept, entry)))}</p>
             <div class="row" style="margin-top:10px;">
               <button class="editEntryBtn secondary" data-entry-id="${entry.entryId}">Eintrag bearbeiten</button>
               <button class="deleteEntryBtn danger" data-entry-id="${entry.entryId}">Eintrag löschen</button>
@@ -9078,6 +9130,7 @@ function fastiActionLabel(action) {
   if (action?.type === "zeit_eintrag_anlegen") return "Zeit buchen";
   if (action?.type === "doku_eintrag_anlegen") return "Eintragen";
   if (action?.type === "abwesenheit_anlegen") return "Eintragen";
+  if (action?.type === "patient_ausgeschieden_setzen") return action.value ? "Als ausgeschieden markieren" : "Wieder aktivieren";
   return "Bestätigen";
 }
 
@@ -9302,6 +9355,13 @@ function runFastiNavigate(navigate) {
 function handleFastiResult(result) {
   fastiPendingInput = null;
 
+  // Bisher hat nur runFastiAction() (der Bestätigen/Abbrechen-Weg) persistiert -
+  // seit der Doku+Zeitbuchung-Rückfrage (answerDokuZeitBuchenChoice()) kann
+  // aber auch eine direkt aus einer choices-Auswahl aufgelöste Antwort schon
+  // eine echte Mutation sein (kein zweiter Bestätigungsklick nötig, da die
+  // choice selbst schon die explizite Nutzerentscheidung ist).
+  if (result.needsPersist) queuePersistRuntimeData();
+
   if (result.choices) {
     appendFastiChoicesMessage(result.reply, result.choices);
   } else if (result.action) {
@@ -9348,6 +9408,12 @@ function runFastiAction(action) {
 
     appendFastiMessage("fasti", result.message);
     setFastiAnimation("nicken");
+
+    // Manche Aktionen (aktuell: Doku-Eintrag anlegen) stellen direkt danach
+    // eine Anschlussfrage, z.B. ob dafür auch Zeit gebucht werden soll.
+    if (result.followUp) {
+      appendFastiChoicesMessage(result.followUp.reply, result.followUp.choices);
+    }
   } catch (err) {
     console.error(err);
     appendFastiMessage("fasti", `Aktion fehlgeschlagen: ${err?.message || err}`);
@@ -9540,12 +9606,21 @@ function makeFastiNoticesResizable() {
 // gemeinsam ein/aus - die drei gehören immer zusammen (kein Sinn, den
 // Resize-Griff zu zeigen, wenn es nichts zum Anzeigen gibt).
 function setFastiNoticesVisible(visible) {
+  const panel = document.getElementById("fastiPanel");
   const noticesEl = document.getElementById("fastiNotices");
   const resizer = document.getElementById("fastiNoticesResizer");
   const dismissAllBtn = document.getElementById("fastiDismissAllBtn");
   if (noticesEl) noticesEl.hidden = !visible;
   if (resizer) resizer.hidden = !visible;
   if (dismissAllBtn) dismissAllBtn.hidden = !visible;
+  // Ohne Meldungen darf das Panel weiterhin kompakt auf seinen Inhalt
+  // schrumpfen (nur max-height als Obergrenze). Mit Meldungen MUSS das Panel
+  // dagegen eine feste Höhe bekommen, sonst hat der Chat-Log (flex:1) keinen
+  // erzwungenen Restplatz, in den er hineinwachsen könnte, wenn die
+  // Meldungsliste per Drag-Griff verkleinert wird - das Panel würde dann nur
+  // insgesamt kürzer, statt dass der Chat-Teil größer wird (siehe
+  // makeFastiNoticesResizable()).
+  if (panel) panel.style.height = visible ? "min(72vh, 640px)" : "";
 }
 
 // Verwirft auf einen Schlag alle aktuell angezeigten Hinweise (Button im

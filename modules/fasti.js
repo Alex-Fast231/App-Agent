@@ -29,6 +29,7 @@ import {
   createAbwesenheit,
   getArztRegistry,
   saveFreikuvertBestellung,
+  setPatientAusgeschieden,
   getHomeById,
   getPatientById,
   getRezeptById
@@ -112,7 +113,10 @@ export function buildRezeptNotices(data) {
 
   (data?.homes || []).forEach((home) => {
     (home.patients || []).forEach((patient) => {
-      if (patient.verstorben) return;
+      // Ausgeschiedene Patienten gelten wie verstorbene nicht mehr als aktiv -
+      // keine Rezept-/Fristen-/Nachbestellungs-Hinweise mehr für sie (siehe
+      // patient.ausgeschieden, per Stammdaten oder FaSti-Chat setzbar).
+      if (patient.verstorben || patient.ausgeschieden) return;
 
       (patient.rezepte || []).forEach((rezept) => {
         const gesamt = totalAnwendungsmenge(rezept.items);
@@ -133,11 +137,20 @@ export function buildRezeptNotices(data) {
         const abgelaufen = !rezept.privat && frist.mode !== "unknown" && Number.isFinite(frist.daysRemaining) && frist.daysRemaining < 0;
 
         if (abgelaufen && verbleibend > 0) {
+          // frist.beginnErfolgt === true heißt: es gibt bereits einen
+          // dokumentierten Behandlungstermin, der Fristverstoß ist also ein
+          // TATSÄCHLICH verspäteter Beginn (nicht nur "heute schon zu spät,
+          // aber noch gar nichts dokumentiert") - frist.statusText
+          // beschreibt das bereits präzise ("Beginn verspätet: ... statt
+          // spätestens ...").
+          const text = frist.beginnErfolgt
+            ? `Konflikt bei ${patientName} (${heimName}): ${frist.statusText} Noch ${verbleibend} Behandlung(en) offen.`
+            : `Konflikt bei ${patientName} (${heimName}): Rezept ist laut Frist (${frist.statusText}) bereits abgelaufen, aber noch ${verbleibend} Behandlung(en) offen.`;
           notices.push({
             id: `rezept-konflikt-${rezept.rezeptId}`,
             bereich: "rezepte",
             priority: "rot",
-            text: `Konflikt bei ${patientName} (${heimName}): Rezept ist laut Frist (${frist.statusText}) bereits abgelaufen, aber noch ${verbleibend} Behandlung(en) offen.`,
+            text,
             action: nachbestellAction
           });
         } else if (gesamt > 0 && verbleibend <= 3) {
@@ -393,7 +406,7 @@ function buildZuzahlungJahreswechselNotices(data) {
 
   (data.homes || []).forEach((home) => {
     (home.patients || []).forEach((patient) => {
-      if (patient.verstorben) return;
+      if (patient.verstorben || patient.ausgeschieden) return;
       if (patient.zuzahlungsstatus !== "ja") return;
 
       const setAt = String(patient.zuzahlungsstatusSetAt || "").trim();
@@ -648,7 +661,7 @@ function answerZuzahlungIntent(data, textLower, patientMatch) {
   if (textLower.includes("nicht befreit") || textLower.includes("wer ist nicht")) {
     const rows = [];
     (data.homes || []).forEach((home) => (home.patients || []).forEach((patient) => {
-      if (patient.verstorben) return;
+      if (patient.verstorben || patient.ausgeschieden) return;
       if (patient.zuzahlungsstatus === "nein" || patient.zuzahlungsstatus === "ungeklaert") {
         rows.push(`${fullPatientName(patient)} (${zuzahlungLabel(patient.zuzahlungsstatus)})`);
       }
@@ -670,7 +683,7 @@ function answerZuzahlungIntent(data, textLower, patientMatch) {
   const befreitRows = [];
   const nichtBefreitRows = [];
   (data.homes || []).forEach((home) => (home.patients || []).forEach((patient) => {
-    if (patient.verstorben) return;
+    if (patient.verstorben || patient.ausgeschieden) return;
     if (patient.zuzahlungsstatus === "ja") {
       befreitRows.push(fullPatientName(patient));
     } else {
@@ -962,6 +975,14 @@ const FASTI_COMMANDS = {
     kind: "navigation",
     needsPatient: false,
     triggerWords: ["neue einrichtung anlegen", "neues heim anlegen", "leg neue einrichtung an", "lege neues heim an"]
+  },
+  // Löscht den Patienten NICHT (das bleibt dauerhaft nur über die
+  // Stammdaten möglich, siehe Sicherheitsgrenze) - markiert ihn nur als
+  // nicht mehr aktiv, damit weder FaSti noch die App künftig eine
+  // Nachbestellung/Zuzahlungs-/Assessment-Erinnerung für ihn erwarten.
+  patient_ausgeschieden_setzen: {
+    kind: "mutation",
+    triggerWords: ["ist ausgeschieden", "als ausgeschieden markieren", "ausgeschieden markieren", "nicht mehr aktiv", "wieder aktiv", "reaktivieren"]
   }
 };
 
@@ -1078,22 +1099,31 @@ function getSingleLeistungMinutenFasti(type) {
 // reguläre Zeiterfassungs-Formular (Typ "behandlung", siehe views.js'
 // "Zeit buchen"-Button) - modules/homes.js hat dafür keine exportierte
 // Funktion (nur createRezeptTimeEntry() mit fest "besprechung" als Typ, für
-// einen anderen Zweck).
-function createFastiTimeEntry(homeId, patientId, rezeptId, { date, minutes, note = "" }) {
+// einen anderen Zweck). Optionales sourceEntryId verknüpft den neuen
+// Zeiteintrag mit einem bereits bestehenden SchnellDoku-Eintrag (siehe
+// answerDokuZeitBuchenChoice() unten) - genau die Verknüpfung, die
+// entry.linkedTimeEntryId/timeEntry.sourceEntryId schon immer vorsahen.
+function createFastiTimeEntry(homeId, patientId, rezeptId, { date, minutes, note = "", sourceEntryId = "" }) {
   mutateRuntimeData((data) => {
     const home = getHomeById(data, homeId);
     const patient = getPatientById(home, patientId);
     const rezept = getRezeptById(patient, rezeptId);
     if (!rezept) throw new Error("Rezept nicht gefunden");
     if (!Array.isArray(rezept.timeEntries)) rezept.timeEntries = [];
+    const timeEntryId = generateId("time");
     rezept.timeEntries.push({
-      timeEntryId: generateId("time"),
+      timeEntryId,
       date,
       type: "behandlung",
       minutes,
       note,
+      sourceEntryId,
       createdAt: new Date().toISOString()
     });
+    if (sourceEntryId) {
+      const sourceEntry = (rezept.entries || []).find((e) => e.entryId === sourceEntryId);
+      if (sourceEntry) sourceEntry.linkedTimeEntryId = timeEntryId;
+    }
   });
 }
 
@@ -1270,6 +1300,23 @@ function runFastiCommand(context, data) {
     return {
       reply: `Öffne ${fullPatientName(patient)}.`,
       navigate: { view: "patient-detail", homeId: home.homeId, patientId: patient.patientId }
+    };
+  }
+
+  if (context.commandId === "patient_ausgeschieden_setzen") {
+    const textLower = String(context.rawText || "").toLowerCase();
+    // "wieder aktiv"/"reaktivieren"/"nicht mehr ausgeschieden" heben den
+    // Status auf, alles andere (inkl. "nicht mehr aktiv") setzt ihn.
+    const value = !(textLower.includes("wieder aktiv") || textLower.includes("reaktivieren") || textLower.includes("nicht mehr ausgeschieden"));
+    const name = fullPatientName(patient);
+    if (!!patient.ausgeschieden === value) {
+      return { reply: `${name} ist bereits als "${value ? "ausgeschieden" : "aktiv"}" markiert.` };
+    }
+    return {
+      reply: value
+        ? `${name} als ausgeschieden markieren? Der Patient bleibt erhalten, gilt aber nicht mehr als aktiv - keine Nachbestellungs-, Zuzahlungs- oder Assessment-Erinnerungen mehr.`
+        : `${name} wieder als aktiv markieren?`,
+      action: { type: "patient_ausgeschieden_setzen", homeId: home.homeId, patientId: patient.patientId, patientName: name, value }
     };
   }
 
@@ -1450,9 +1497,26 @@ function runFastiIntent(context, data) {
 // (runFastiCommand) oder eine Abfrage (runFastiIntent) mit dem jetzt
 // aufgelösten resume-Kontext fort (kann erneut choices, eine action oder
 // eine navigate-Antwort liefern, falls noch etwas offen ist).
+// Antwort auf die "Soll ich für diesen Termin auch Zeit buchen?"-Rückfrage
+// (siehe executeFastiAction() Fall "doku_eintrag_anlegen") - minutes:0 heißt
+// "Nein", alles andere bucht per createFastiTimeEntry() und verknüpft den
+// Zeiteintrag mit dem bereits angelegten Doku-Eintrag (resume.entryId).
+function answerDokuZeitBuchenChoice(resume, data) {
+  if (!resume.minutes || resume.minutes <= 0) {
+    return { reply: "Alles klar, keine Zeit gebucht." };
+  }
+  createFastiTimeEntry(resume.homeId, resume.patientId, resume.rezeptId, {
+    date: resume.date,
+    minutes: resume.minutes,
+    sourceEntryId: resume.entryId
+  });
+  return { reply: `${resume.minutes} Minuten für ${resume.patientName} am ${resume.date} gebucht.`, needsPersist: true };
+}
+
 export function resumeFastiChoice(resume, data) {
   if (resume?.kind === "intent") return runFastiIntent(resume, data);
   if (resume?.kind === "nachbestell_queue") return processNachbestellQueue(resume.queue, resume.arzt, data);
+  if (resume?.kind === "doku_zeit_buchen") return answerDokuZeitBuchenChoice(resume, data);
   return runFastiCommand(resume, data);
 }
 
@@ -1487,6 +1551,11 @@ export function executeFastiAction(action, data) {
       return { message: `${action.patientName}: Zuzahlungsstatus auf "${zuzahlungLabel(action.status)}" gesetzt.`, needsPersist: true };
     }
 
+    case "patient_ausgeschieden_setzen": {
+      setPatientAusgeschieden(action.homeId, action.patientId, action.value);
+      return { message: `${action.patientName} als "${action.value ? "ausgeschieden" : "aktiv"}" markiert.`, needsPersist: true };
+    }
+
     case "assessment_verschieben": {
       const dueDateComparable = getComparableFromDate(addDaysToDate(new Date(), 90));
       scheduleAssessment(action.homeId, action.patientId, dueDateComparable);
@@ -1503,8 +1572,32 @@ export function executeFastiAction(action, data) {
     }
 
     case "doku_eintrag_anlegen": {
-      createRezeptEntry(action.homeId, action.patientId, action.rezeptId, { date: action.date, text: action.content });
-      return { message: `Doku-Eintrag für ${action.patientName} am ${action.date} angelegt.`, needsPersist: true };
+      const entryId = createRezeptEntry(action.homeId, action.patientId, action.rezeptId, { date: action.date, text: action.content });
+      // Direkt danach fragen, ob dafür auch Zeit gebucht werden soll - FaSti
+      // bucht NICHT still im Hintergrund, sondern schlägt nur die aus der
+      // Leistungsart berechnete Dauer als Option vor (genau wie das reguläre
+      // "Zeit buchen"-Formular mit 20/40/60 Minuten zur Auswahl anbietet,
+      // nur eben nicht ungefragt).
+      const home = getHomeById(data, action.homeId);
+      const patient = getPatientById(home, action.patientId);
+      const rezept = getRezeptById(patient, action.rezeptId);
+      const autoMinutes = getAutoMinutesForRezept(rezept);
+      const followUp = autoMinutes > 0
+        ? {
+            reply: `Soll ich für diesen Termin auch die Zeit buchen (${autoMinutes} Minuten)?`,
+            choices: [
+              {
+                label: `Ja, ${autoMinutes} Minuten buchen`,
+                resume: { kind: "doku_zeit_buchen", homeId: action.homeId, patientId: action.patientId, rezeptId: action.rezeptId, entryId, date: action.date, patientName: action.patientName, minutes: autoMinutes }
+              },
+              {
+                label: "Nein",
+                resume: { kind: "doku_zeit_buchen", homeId: action.homeId, patientId: action.patientId, rezeptId: action.rezeptId, entryId, date: action.date, patientName: action.patientName, minutes: 0 }
+              }
+            ]
+          }
+        : null;
+      return { message: `Doku-Eintrag für ${action.patientName} am ${action.date} angelegt.`, needsPersist: true, followUp };
     }
 
     case "zeit_eintrag_anlegen": {
