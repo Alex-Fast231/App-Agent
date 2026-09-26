@@ -141,6 +141,10 @@ export function buildRezeptNotices(data) {
         const frist = getRezeptFristInfo(rezept);
         const patientName = fullPatientName(patient);
         const heimName = home.name || "—";
+        // Patienten können mehrere offene Rezepte gleichzeitig haben - ohne
+        // das Ausstellungsdatum wäre bei einer Meldung nicht erkennbar,
+        // welches der Rezepte konkret gemeint ist.
+        const rezeptDatumLabel = rezept.ausstell ? `, Rezept vom ${rezept.ausstell}` : "";
         const arzt = String(rezept.arzt || "").trim();
         const nachbestellAction = arzt
           ? { type: "nachbestellung_vorschlagen", homeId: home.homeId, patientId: patient.patientId, rezeptId: rezept.rezeptId, patientName, arzt }
@@ -160,8 +164,8 @@ export function buildRezeptNotices(data) {
           // beschreibt das bereits präzise ("Beginn verspätet: ... statt
           // spätestens ...").
           const text = frist.beginnErfolgt
-            ? `Konflikt bei ${patientName} (${heimName}): ${frist.statusText} Noch ${verbleibend} Behandlung(en) offen.`
-            : `Konflikt bei ${patientName} (${heimName}): Rezept ist laut Frist (${frist.statusText}) bereits abgelaufen, aber noch ${verbleibend} Behandlung(en) offen.`;
+            ? `Konflikt bei ${patientName} (${heimName})${rezeptDatumLabel}: ${frist.statusText} Noch ${verbleibend} Behandlung(en) offen.`
+            : `Konflikt bei ${patientName} (${heimName})${rezeptDatumLabel}: Rezept ist laut Frist (${frist.statusText}) bereits abgelaufen, aber noch ${verbleibend} Behandlung(en) offen.`;
           notices.push({
             id: `rezept-konflikt-${rezept.rezeptId}`,
             bereich: "rezepte",
@@ -175,8 +179,8 @@ export function buildRezeptNotices(data) {
             bereich: "rezepte",
             priority: verbleibend <= 0 ? "rot" : "orange",
             text: verbleibend <= 0
-              ? `${patientName} (${heimName}): Rezept ist aufgebraucht (${gesamt} von ${gesamt}) - Nachbestellung nötig.`
-              : `${patientName} (${heimName}): Noch ${verbleibend} von ${gesamt} Behandlung(en) übrig - Nachbestellung vorbereiten.`,
+              ? `${patientName} (${heimName})${rezeptDatumLabel}: Rezept ist aufgebraucht (${gesamt} von ${gesamt}) - Nachbestellung nötig.`
+              : `${patientName} (${heimName})${rezeptDatumLabel}: Noch ${verbleibend} von ${gesamt} Behandlung(en) übrig - Nachbestellung vorbereiten.`,
             action: nachbestellAction
           });
         }
@@ -186,7 +190,7 @@ export function buildRezeptNotices(data) {
             id: `rezept-frist-${rezept.rezeptId}`,
             bereich: "fristen",
             priority: frist.traffic === "red" ? "rot" : "orange",
-            text: `${patientName} (${heimName}): Frist ${frist.statusText} (${frist.detailsText}).`,
+            text: `${patientName} (${heimName})${rezeptDatumLabel}: Frist ${frist.statusText} (${frist.detailsText}).`,
             action: null
           });
         }

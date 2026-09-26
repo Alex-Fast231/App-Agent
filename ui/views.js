@@ -3654,12 +3654,23 @@ function bindQuickDocHandlers({ homeId, patient, onSaved }) {
   const dateInputEl = document.getElementById(`quickDocDate-${patientId}`);
   if (dateInputEl) bindDateAutoFormat(dateInputEl);
 
+  // Sichtbare Markierung des ausgewählten Zielrezepts: das Setzen von
+  // other.checked = false unten löst KEIN "change"-Event aus (nur echte
+  // Nutzerinteraktion tut das), weshalb sich die von bindCheckChipToggles()
+  // gesetzte .is-checked-Klasse an den abgewählten Geschwister-Chips sonst
+  // nie wieder entfernt hätte - die Klasse wird deshalb hier direkt und
+  // vollständig selbst verwaltet, statt sich auf ein extern ausgelöstes
+  // "change" zu verlassen.
   document.querySelectorAll(`.quickDocRezeptCheck[data-patient-id="${patientId}"]`).forEach((check) => {
     check.addEventListener('change', () => {
       if (!check.checked) return;
       document.querySelectorAll(`.quickDocRezeptCheck[data-patient-id="${patientId}"]`).forEach((other) => {
-        if (other !== check) other.checked = false;
+        if (other !== check) {
+          other.checked = false;
+          other.closest('.check-chip')?.classList.remove('is-checked');
+        }
       });
+      check.closest('.check-chip')?.classList.add('is-checked');
     });
   });
 
@@ -3808,6 +3819,7 @@ export function showDokuSchreibenView({ onLock, homeId, patientId, searchText = 
       ${renderQuickDocFields(patient, prefillDate)}
     </div>
   `);
+  bindCheckChipToggles(app);
 
   document.getElementById("backDokuListeBtn").onclick = () => showDokuPatientenListeView({ onLock, searchText });
 

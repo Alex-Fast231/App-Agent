@@ -13,9 +13,11 @@ import { mutateRuntimeData, queuePersistRuntimeData } from "../core/app-core.js"
 // Fehlschlagpfad mehr, der Therapeut sieht direkt, ob das Backup
 // tatsächlich erstellt wurde.
 //
-// Vorgabe des Nutzers: alle 14 Tage - die Kalendertag-Zählung in
+// TEMPORÄR AUF NUTZERWUNSCH ZUM TESTEN AUF 0 GESETZT (Erinnerung erscheint
+// bei JEDEM App-Öffnen) - die eigentliche Vorgabe ist alle 14 Tage. Vor dem
+// produktiven Einsatz wieder auf 14 zurücksetzen! Die Kalendertag-Zählung in
 // isBackupReminderDue() funktioniert unverändert für jeden Intervallwert.
-const BACKUP_REMINDER_INTERVAL_DAYS = 14;
+const BACKUP_REMINDER_INTERVAL_DAYS = 0;
 
 // Fallback-Zieladresse für den mailto-Link, falls in den Einstellungen noch
 // keine Büro-Mail hinterlegt ist. Der Therapeut kann die Zieladresse im
