@@ -3610,7 +3610,7 @@ export function showPatientenListeView({ onLock, searchText = "" } = {}) {
 // (showHomeDetailView) als auch vom neuen Dashboard-Button "Doku"
 // (showDokuSchreibenView) - beide Wege müssen laut Vorgabe exakt dieselbe
 // Funktion bieten, nur der Einstiegsweg unterscheidet sich.
-function renderQuickDocFields(patient, prefillDate = "") {
+function renderQuickDocFields(patient, prefillDate = "", prefillRezeptId = "") {
   const quickDocRezepte = sortRezepteForDisplay(patient.rezepte || []).filter((rezept) => rezept.abgegeben !== true);
   return `
     <div class="compact-card" style="margin-bottom:10px;">
@@ -3626,15 +3626,17 @@ function renderQuickDocFields(patient, prefillDate = "") {
       <div class="compact-card" style="margin-bottom:10px;">
         <div style="font-weight:600; margin-bottom:6px;">Zielrezept auswählen</div>
         <div class="list-stack">
-          ${quickDocRezepte.map(rezept => `
-            <label class="check-chip quick-doc-chip" data-patient-id="${patient.patientId}" data-rezept-id="${rezept.rezeptId}" style="flex:1 1 auto;">
-              <input class="quickDocRezeptCheck" type="checkbox" data-patient-id="${patient.patientId}" data-rezept-id="${rezept.rezeptId}">
+          ${quickDocRezepte.map(rezept => {
+            const isPreselected = !!prefillRezeptId && rezept.rezeptId === prefillRezeptId;
+            return `
+            <label class="check-chip quick-doc-chip${isPreselected ? " is-checked" : ""}" data-patient-id="${patient.patientId}" data-rezept-id="${rezept.rezeptId}" style="flex:1 1 auto;">
+              <input class="quickDocRezeptCheck" type="checkbox" data-patient-id="${patient.patientId}" data-rezept-id="${rezept.rezeptId}" ${isPreselected ? "checked" : ""}>
               <span>
                 <strong>Zielrezept vom: ${escapeHtml(rezept.ausstell || "—")}</strong><br>
                 <span class="muted">${escapeHtml(rezeptSummary(rezept))}</span>
               </span>
             </label>
-          `).join("")}
+          `;}).join("")}
         </div>
       </div>
     `}
@@ -3789,7 +3791,7 @@ export function showDokuPatientenListeView({ onLock, searchText = "" } = {}) {
 // Umweg - siehe showDokuPatientenListeView() oben. Nutzt dieselben
 // renderQuickDocFields()/bindQuickDocHandlers()-Bausteine wie die
 // SchnellDoku in showHomeDetailView.
-export function showDokuSchreibenView({ onLock, homeId, patientId, searchText = "", prefillDate = "" }) {
+export function showDokuSchreibenView({ onLock, homeId, patientId, searchText = "", prefillDate = "", prefillRezeptId = "" }) {
   bindLockButton(onLock);
   setCurrentView("doku-schreiben", { homeId, patientId, searchText });
 
@@ -3816,7 +3818,7 @@ export function showDokuSchreibenView({ onLock, homeId, patientId, searchText = 
     </div>
 
     <div class="card">
-      ${renderQuickDocFields(patient, prefillDate)}
+      ${renderQuickDocFields(patient, prefillDate, prefillRezeptId)}
     </div>
   `);
   bindCheckChipToggles(app);
@@ -8856,7 +8858,8 @@ function bindFastiNoticeButtons() {
           onLock: fastiOnLock,
           homeId: notice.action.homeId,
           patientId: notice.action.patientId,
-          prefillDate: notice.action.date
+          prefillDate: notice.action.date,
+          prefillRezeptId: notice.action.rezeptId
         });
         return;
       }

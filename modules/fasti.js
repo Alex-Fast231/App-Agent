@@ -217,10 +217,25 @@ function buildDokuFehltNotices(data) {
 
       const patientName = fullPatientName(patient);
       const heimName = home.name || "—";
-      const missingDates = new Set();
 
+      // WICHTIG: missingDates muss PRO REZEPT ermittelt werden, nicht einmal
+      // patientenweit gesammelt - sonst wird bei mehreren gleichzeitig
+      // offenen Rezepten desselben Patienten eine Meldung schon dadurch
+      // "aufgelöst", dass irgendein Rezept an diesem Datum einen Doku-Eintrag
+      // bekommt, selbst wenn das eigentlich betroffene Rezept weiterhin ohne
+      // Doku-Eintrag dasteht (buildFastiNotices() erzeugt die Meldung beim
+      // nächsten Entsperren erneut, da rezept.entries des betroffenen Rezepts
+      // unverändert blieb).
       (patient.rezepte || []).forEach((rezept) => {
+        // Abgegebene Rezepte werden von FaSti grundsätzlich nicht mehr
+        // geprüft (siehe buildRezeptNotices() oben) - sonst würde hier eine
+        // Meldung erzeugt, die sich über die SchnellDoku-Ansicht gar nicht
+        // beheben ließe, da abgegebene Rezepte dort nicht mehr zur Auswahl
+        // stehen.
+        if (rezept.abgegeben) return;
+
         const dokuDates = new Set((rezept.entries || []).map((e) => e?.date).filter(Boolean));
+        const missingDates = new Set();
         (rezept.timeEntries || []).forEach((entry) => {
           if (entry?.type !== "behandlung" || !entry?.date) return;
           if (dokuDates.has(entry.date)) return;
@@ -228,15 +243,15 @@ function buildDokuFehltNotices(data) {
           if (!comparable || comparable >= todayComparable) return;
           missingDates.add(entry.date);
         });
-      });
 
-      missingDates.forEach((date) => {
-        notices.push({
-          id: `doku-fehlt-${patient.patientId}-${date}`,
-          bereich: "doku",
-          priority: "orange",
-          text: `${patientName} (${heimName}): Dokueintrag fehlt vom ${date}.`,
-          action: { type: "doku_nachtragen", homeId: home.homeId, patientId: patient.patientId, patientName, date }
+        missingDates.forEach((date) => {
+          notices.push({
+            id: `doku-fehlt-${patient.patientId}-${rezept.rezeptId}-${date}`,
+            bereich: "doku",
+            priority: "orange",
+            text: `${patientName} (${heimName}): Dokueintrag fehlt vom ${date}.`,
+            action: { type: "doku_nachtragen", homeId: home.homeId, patientId: patient.patientId, rezeptId: rezept.rezeptId, patientName, date }
+          });
         });
       });
     });
