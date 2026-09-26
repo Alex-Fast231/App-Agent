@@ -13,14 +13,13 @@ import { mutateRuntimeData, queuePersistRuntimeData } from "../core/app-core.js"
 // Fehlschlagpfad mehr, der Therapeut sieht direkt, ob das Backup
 // tatsächlich erstellt wurde.
 //
-// Vorgabe des Nutzers: nach abgeschlossenem Testbetrieb auf alle 4 Wochen
-// umgestellt (vorher täglich zum Testen) - die Kalendertag-Zählung in
+// Vorgabe des Nutzers: alle 14 Tage - die Kalendertag-Zählung in
 // isBackupReminderDue() funktioniert unverändert für jeden Intervallwert.
-const BACKUP_REMINDER_INTERVAL_DAYS = 28;
+const BACKUP_REMINDER_INTERVAL_DAYS = 14;
 
-// Vorausgefüllte Zieladresse für den mailto-Link (Vorgabe des Nutzers,
-// unverändert aus der vorherigen EmailJS-Version). Der Therapeut kann sie
-// im geöffneten E-Mail-Programm bei Bedarf noch ändern.
+// Fallback-Zieladresse für den mailto-Link, falls in den Einstellungen noch
+// keine Büro-Mail hinterlegt ist. Der Therapeut kann die Zieladresse im
+// geöffneten E-Mail-Programm bei Bedarf noch ändern.
 const BACKUP_REMINDER_TARGET_EMAIL = "physio_fast@gmx.de";
 
 // PIN, mit der die heruntergeladene ZIP-Datei im Viewer entsperrt werden
@@ -106,10 +105,16 @@ export async function buildBackupZip(runtimeData) {
 // mailto kann aus Sicherheitsgründen keine Dateianhänge setzen - die ZIP
 // muss vorher separat heruntergeladen und dann vom Therapeuten manuell an
 // die geöffnete E-Mail angehängt werden. Der Text weist darauf explizit hin.
-export function buildBackupReminderMailtoLink({ filename, therapistName }) {
+// bueroEmail kommt aus den Einstellungen (Büro-Mail) - ist dort nichts
+// hinterlegt, wird auf die bisherige feste Zieladresse zurückgefallen, damit
+// bestehende Praxen ohne gepflegte Büro-Mail nicht ohne Empfänger dastehen.
+export function buildBackupReminderMailtoLink({ filename, therapistName, therapistEmail = "", bueroEmail = "" }) {
   const subject = `Backup ${therapistName || "Therapeut"}`;
   const body = `Bitte die soeben heruntergeladene Datei "${filename}" manuell anhängen.`;
-  return `mailto:${BACKUP_REMINDER_TARGET_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  const to = bueroEmail || BACKUP_REMINDER_TARGET_EMAIL;
+  const params = [`subject=${encodeURIComponent(subject)}`, `body=${encodeURIComponent(body)}`];
+  if (therapistEmail) params.push(`cc=${encodeURIComponent(therapistEmail)}`);
+  return `mailto:${encodeURIComponent(to)}?${params.join("&")}`;
 }
 
 function pushBackupReminderHistory(data, status, message) {

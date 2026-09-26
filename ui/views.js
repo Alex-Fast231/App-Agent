@@ -1188,7 +1188,7 @@ function joinArztAdresse(strasse, plz, ort) {
   return [String(strasse || "").trim(), plzOrt].filter(Boolean).join(", ");
 }
 
-function renderArztAdresseFields(adresse) {
+function renderArztAdresseFields(adresse, email = "") {
   const parts = splitArztAdresse(adresse);
   return `
     <label for="arztStrasse">Arztadresse (Straße, Hausnummer)</label>
@@ -1203,6 +1203,8 @@ function renderArztAdresseFields(adresse) {
         <input id="arztOrt" type="text" placeholder="Musterstadt" value="${escapeHtml(parts.ort)}">
       </div>
     </div>
+    <label for="arztEmail">E-Mail (für Nachbestellung per Mail)</label>
+    <input id="arztEmail" type="email" autocomplete="off" placeholder="praxis@arzt.de" value="${escapeHtml(email || "")}">
   `;
 }
 
@@ -1217,6 +1219,7 @@ function bindArztAdresseAutofill(arztInput, arztRegistry) {
   const strasseInput = document.getElementById("arztStrasse");
   const plzInput = document.getElementById("arztPlz");
   const ortInput = document.getElementById("arztOrt");
+  const emailInput = document.getElementById("arztEmail");
 
   function fillAddressFor(name) {
     const match = arztRegistry.find((a) => a.name === name);
@@ -1224,6 +1227,7 @@ function bindArztAdresseAutofill(arztInput, arztRegistry) {
     strasseInput.value = parts.strasse;
     plzInput.value = parts.plz;
     ortInput.value = parts.ort;
+    if (emailInput) emailInput.value = match?.email || "";
   }
 
   // position:fixed mit per Hand berechneten Koordinaten statt einer
@@ -1328,6 +1332,10 @@ function collectArztAdresseFromForm() {
   );
 }
 
+function collectArztEmailFromForm() {
+  return document.getElementById("arztEmail")?.value.trim() || "";
+}
+
 function renderZuzahlungsstatusSelect(id, value) {
   return `
     <select id="${id}">
@@ -1356,19 +1364,6 @@ function renderRadioGroup(name, options, selected) {
   `;
 }
 
-function renderPointGroup(name, points, selected) {
-  return `
-    <div class="checkbox-row">
-      ${points.map((p) => `
-        <label class="check-chip">
-          <input type="radio" name="${name}" value="${p}" ${Number(selected) === p ? "checked" : ""}>
-          <span>${p}</span>
-        </label>
-      `).join("")}
-    </div>
-  `;
-}
-
 function getRadioValue(name) {
   const el = document.querySelector(`input[name="${name}"]:checked`);
   return el ? el.value : "";
@@ -1390,38 +1385,6 @@ function renderCheckboxList(namePrefix, options, selectedValues) {
 
 function getCheckboxListValues(namePrefix) {
   return Array.from(document.querySelectorAll(`.${namePrefix}-check:checked`)).map((el) => el.value);
-}
-
-function renderRomJointRow(joint, current, currentGrad) {
-  return `
-    <div class="compact-card" style="margin-bottom:8px;">
-      <div style="font-weight:600; margin-bottom:6px;">${escapeHtml(joint.label)}</div>
-      ${joint.aufgabe ? `<div class="compact-meta" style="margin-bottom:8px;">${escapeHtml(joint.aufgabe)}</div>` : ""}
-      <div class="checkbox-row">
-        ${Assessment.ROM_BEWERTUNG_OPTIONEN.map((opt) => `
-          <label class="check-chip">
-            <input type="radio" name="rom-${joint.key}" value="${opt.val}" ${current === opt.val ? "checked" : ""}>
-            <span>${escapeHtml(opt.label)}</span>
-          </label>
-        `).join("")}
-      </div>
-      <div style="margin-top:8px;">
-        <label class="muted" style="font-size:0.85em;">Gradzahl (optional)</label>
-        <input type="number" class="rom-grad-input" data-grad-for="${joint.key}" placeholder="z.B. 90°" value="${currentGrad ?? ""}" style="width:100px;">
-      </div>
-    </div>
-  `;
-}
-
-function collectRomJointResults(joints, selectedKeys) {
-  return joints
-    .filter((j) => selectedKeys.includes(j.key))
-    .map((j) => {
-      const gradRaw = document.querySelector(`.rom-grad-input[data-grad-for="${j.key}"]`)?.value;
-      const grad = gradRaw !== undefined && gradRaw !== "" ? Number(gradRaw) : null;
-      return { gelenk: j.key, bewertung: getRadioValue(`rom-${j.key}`), grad };
-    })
-    .filter((r) => r.bewertung);
 }
 
 function ampelBadgeHtml(ampel) {
@@ -1483,6 +1446,11 @@ function extractAssessmentScores(assessment) {
     const mrc = Assessment.computeMrcTotal(a.schwerst?.mrc?.gruppen);
     if (mrc.count > 0) {
       scores.push({ key: "mrcSchwerst", label: "MRC gesamt (liegend)", value: mrc.total, max: mrc.max, direction: "high" });
+    }
+  } else if (a.weiche === "bbs") {
+    const bbs = Assessment.computeBbsTotal(a.bbs14);
+    if (bbs.maxPossible > 0) {
+      scores.push({ key: "bbs14", label: "Berg-Balance-Test", value: bbs.total, max: bbs.maxPossible, direction: "high", classify: () => Assessment.classifyBbs(bbs.total, bbs.maxPossible) });
     }
   }
 
@@ -1637,14 +1605,98 @@ function render(html) {
   bindDateAutoFormatsIn(app);
 }
 
+// Android-Hardware-/Geste-Zurück-Taste: soll die App nie schließen, sondern
+// exakt dieselbe Funktion wie der jeweils sichtbare In-App-"Zurück"-Button
+// auslösen - unabhängig davon, wo in der App man sich gerade befindet. Die
+// App hat kein URL-Routing (jede Ansicht wird per direktem Funktionsaufruf
+// gerendert), daher dient die History-API hier nur als reine Sperre: ein
+// einzelner Wächter-Eintrag wird bei jedem Zurück-Druck sofort wieder
+// nachgeschoben (Standardtrick für PWAs ohne Router), sodass die
+// History-Tiefe konstant bleibt und die Taste niemals tatsächlich aus der
+// App heraus navigiert oder sie schließt.
+//
+// Der zu klickende Button wird zur Laufzeit anhand seiner id gesucht statt
+// jede Ansicht einzeln zu verdrahten: alle echten Zurück-Buttons der App
+// folgen durchgängig dem Namensmuster "backXyzBtn" bzw. "...BackXyz" (z.B.
+// backDashboardBtn, wizardBack, zeitBackHomeBtn), vereinzelt auch
+// "...ZurueckBtn" (z.B. assessmentSpaeterZurueckBtn) - verlangt wird jeweils
+// ein großer Anfangsbuchstabe direkt nach "back"/"zurueck", um z.B.
+// "backupReminderDownloadBtn" (Backup, kein Zurück-Button) sicher
+// auszuschließen. Ist kein solcher Button sichtbar (z.B. ein Dialog mit nur
+// "Abbrechen"), wird ersatzweise danach gesucht - bewusst OHNE "später"/
+// "spaeter", da das eine eigenständige Weiter-Aktion mit Seiteneffekt ist
+// (Termin verschieben), keine reine Zurück-Aktion, und sonst z.B. auf der
+// Assessment-Startseite fälschlich vor "Abbrechen" ausgewählt würde. Bleibt
+// auch das erfolglos (z.B. auf dem PIN-Login-Bildschirm), bleibt der
+// Tastendruck wirkungslos, statt die App zu verlassen oder den PIN-Schutz
+// versehentlich zu umgehen.
+function isBackLikeButtonId(id) {
+  return /^back[A-Z]/.test(id) || /[a-z]Back([A-Z]|$)/.test(id)
+    || /^zurueck[A-Z]/.test(id) || /[a-z]Zurueck([A-Z]|$)/.test(id);
+}
+
+function isFallbackDismissButtonId(id) {
+  return /abbrechen|cancel|schliessen|schließen|close/i.test(id);
+}
+
+// Nur für Buttons INNERHALB eines Overlays (siehe findHardwareBackTarget) -
+// dort ist "Später"/"Later" (z.B. backupReminderLaterBtn) die einzige echte
+// Dismiss-Aktion neben Abbrechen/Schließen, anders als z.B. auf der
+// Assessment-Startseite, wo "Später" eine eigenständige Weiter-Aktion mit
+// Seiteneffekt ist und deshalb bewusst NICHT in isFallbackDismissButtonId
+// landet (siehe Kommentar dort).
+function isOverlayDismissButtonId(id) {
+  return isFallbackDismissButtonId(id) || /spaeter|später|later/i.test(id);
+}
+
+function findHardwareBackTarget() {
+  // Offene Overlays (Backup-Erinnerung, Assessment verschieben) liegen
+  // außerhalb von #app direkt in <body> und legen sich optisch über die
+  // aktuelle Ansicht - ihr eigener Abbrechen-/Später-Button hat Vorrang vor
+  // dem darunterliegenden Zurück-Button der eigentlichen Ansicht.
+  const overlay = document.querySelector('[id$="Overlay"]');
+  if (overlay) {
+    const overlayBtn = Array.from(overlay.querySelectorAll('button[id]'))
+      .find((btn) => isOverlayDismissButtonId(btn.id) || isBackLikeButtonId(btn.id));
+    if (overlayBtn) return overlayBtn;
+  }
+
+  const buttons = Array.from(document.querySelectorAll('#app button[id]'));
+  return buttons.find((btn) => isBackLikeButtonId(btn.id))
+    || buttons.find((btn) => isFallbackDismissButtonId(btn.id))
+    || null;
+}
+
+function pushHardwareBackGuard() {
+  try {
+    history.pushState({ appBackGuard: true }, "", location.href);
+  } catch (err) {
+    // pushState kann in seltenen eingebetteten Kontexten fehlschlagen - dann
+    // bleibt die Zurück-Taste beim nächsten Druck wirkungslos, statt die App
+    // zum Absturz zu bringen.
+    console.error("Zurück-Sperre konnte nicht gesetzt werden", err);
+  }
+}
+
+function initHardwareBackButtonHandling() {
+  pushHardwareBackGuard();
+  window.addEventListener("popstate", () => {
+    pushHardwareBackGuard();
+    const target = findHardwareBackTarget();
+    if (target) target.click();
+  });
+}
+
+initHardwareBackButtonHandling();
+
 // Kurze, stille Meldung (z.B. "Export gesendet") ohne dass der Therapeut
 // etwas tun muss. Verschwindet nach ein paar Sekunden von selbst.
-export function showToast(message) {
+export function showToast(message, duration = 4000) {
   const toast = document.createElement("div");
   toast.textContent = message;
   toast.style.cssText = "position:fixed; left:50%; bottom:24px; transform:translateX(-50%); background:#0f172a; color:#fff; padding:12px 18px; border-radius:12px; font-size:14px; box-shadow:0 10px 30px rgba(15,23,42,0.25); z-index:9999; max-width:90vw; text-align:center;";
   document.body.appendChild(toast);
-  setTimeout(() => toast.remove(), 4000);
+  setTimeout(() => toast.remove(), duration);
 }
 
 // Erinnerung an das Viewer-Backup als eigenständiges Overlay (als Kind von
@@ -1717,10 +1769,12 @@ export function showBackupReminderModal({ onDone } = {}) {
       const result = await createBackupZip();
       window.location.href = buildBackupReminderMailtoLink({
         filename: result.filename,
-        therapistName: runtimeData.settings?.therapistName
+        therapistName: runtimeData.settings?.therapistName,
+        therapistEmail: runtimeData.settings?.therapistEmail,
+        bueroEmail: runtimeData.settings?.buero?.email
       });
       await markBackupReminderHandled(`Backup "${result.filename}" heruntergeladen, E-Mail-Programm geöffnet (Anhang manuell hinzufügen).`);
-      showToast("Backup heruntergeladen - bitte in der E-Mail anhängen");
+      showToast("Backup versendet", 2000);
       close();
     } catch (err) {
       console.error(err);
@@ -1977,6 +2031,11 @@ function renderNachbestellLetterHtml(letterData = {}, { versandart = "fax", abho
       Bitte senden Sie die neue Heilmittelverordnung per Fax an meine Fax-Nummer, damit ich die Therapie ohne Unterbrechung fortsetzen kann.<br>
       Bitte senden Sie die Originale der Verordnungen anschließend per Post an unsere Praxisadresse:<br>
       ${praxisAdresseZeilen}<br>
+      Vielen Dank für Ihre Unterstützung.
+    `,
+    email: `
+      für unsere gemeinsamen Patientinnen und Patienten bitten wir Sie, folgende Heilmittelverordnungen für Physiotherapie auszustellen und diese per E-Mail an den Absender dieser Nachricht zurückzusenden.<br>
+      Bitte lassen Sie die Originale der Verordnungen anschließend der jeweils unten angegebenen Einrichtung zukommen.<br>
       Vielen Dank für Ihre Unterstützung.
     `
   };
@@ -2677,6 +2736,10 @@ export function showSettingsView({ onLock }) {
       <label for="settingsTherapistName">Therapeutenname</label>
       <input id="settingsTherapistName" type="text" autocomplete="off" value="${escapeHtml(settings.therapistName || "")}">
 
+      <label for="settingsTherapistEmail">Therapeuten-E-Mail</label>
+      <input id="settingsTherapistEmail" type="email" autocomplete="off" value="${escapeHtml(settings.therapistEmail || "")}" placeholder="name@praxis.de">
+      <p class="muted">Wird als Absender-Hinweis/CC bei E-Mails aus der App verwendet (Urlaub/Krank, Freikuvert, Nachbestellung) - die App öffnet dafür einen vorausgefüllten Entwurf im installierten E-Mail-Programm.</p>
+
       <label>Praxisadresse</label>
       <p class="muted" style="white-space:pre-line; border:1px solid var(--border); border-radius:10px; padding:10px 12px; margin-top:4px;">${escapeHtml(PRACTICE_ADDRESS)}</p>
 
@@ -2746,6 +2809,7 @@ export function showSettingsView({ onLock }) {
 
   document.getElementById("saveSettingsBtn").onclick = async () => {
     const therapistName = document.getElementById("settingsTherapistName").value.trim();
+    const therapistEmail = document.getElementById("settingsTherapistEmail").value.trim();
     const practiceAddress = PRACTICE_ADDRESS;
     const practicePhone = PRACTICE_PHONE;
     const therapistFax = document.getElementById("settingsTherapistFax").value.trim();
@@ -2792,6 +2856,7 @@ export function showSettingsView({ onLock }) {
     try {
       mutateRuntimeData((data) => {
         data.settings.therapistName = therapistName;
+        data.settings.therapistEmail = therapistEmail;
         data.settings.practiceAddress = practiceAddress;
         data.settings.practicePhone = practicePhone;
         data.settings.therapistFax = therapistFax;
@@ -2992,15 +3057,18 @@ export function showDashboardView({ onLock, keepOverviewOpen = false } = {}) {
     <div class="card">
       <h3>Bereiche</h3>
       <div class="row">
-        <button id="openZeiterfassungBtn" style="margin-top:0;">⏱ Zeiterfassung</button>
+        <button id="openDokuBtn" style="margin-top:0;">📝 Doku</button>
+        <button id="openZeiterfassungBtn" class="secondary" style="margin-top:0;">⏱ Zeiterfassung</button>
+      </div>
+      <div class="row" style="margin-top:12px;">
         <button id="openHomesBtn" class="secondary" style="margin-top:0;">Einrichtungen</button>
-      </div>
-      <div class="row" style="margin-top:12px;">
         <button id="openPatientenBtn" class="secondary" style="margin-top:0;">👤 Patienten</button>
-        <button id="openAbgabeBtn" class="secondary" style="margin-top:0;">Abgabeliste</button>
       </div>
       <div class="row" style="margin-top:12px;">
+        <button id="openAbgabeBtn" class="secondary" style="margin-top:0;">Abgabeliste</button>
         <button id="openNachbestellBtn" class="secondary" style="margin-top:0;">Nachbestellung</button>
+      </div>
+      <div class="row" style="margin-top:12px;">
         <button id="openKilometerBtn" class="secondary" style="margin-top:0;">Kilometer</button>
       </div>
       <div class="row" style="margin-top:12px;">
@@ -3051,6 +3119,7 @@ export function showDashboardView({ onLock, keepOverviewOpen = false } = {}) {
   `);
 
   document.getElementById("openSettingsBtn").onclick = () => showSettingsView({ onLock });
+  document.getElementById("openDokuBtn").onclick = () => showDokuPatientenListeView({ onLock });
   document.getElementById("openZeiterfassungBtn").onclick = () => showZeiterfassungView({ onLock });
   document.getElementById("openHomesBtn").onclick = () => showHomesView({ onLock });
   document.getElementById("openPatientenBtn").onclick = () => showPatientenListeView({ onLock });
@@ -3500,6 +3569,222 @@ export function showPatientenListeView({ onLock, searchText = "" } = {}) {
   });
 }
 
+// Gemeinsamer SchnellDoku-Baustein (Markup + Bindung), genutzt sowohl von der
+// bestehenden Einrichtungen->Einrichtung->Patient->SchnellDoku-Stelle
+// (showHomeDetailView) als auch vom neuen Dashboard-Button "Doku"
+// (showDokuSchreibenView) - beide Wege müssen laut Vorgabe exakt dieselbe
+// Funktion bieten, nur der Einstiegsweg unterscheidet sich.
+function renderQuickDocFields(patient) {
+  const quickDocRezepte = sortRezepteForDisplay(patient.rezepte || []).filter((rezept) => rezept.abgegeben !== true);
+  return `
+    <div class="compact-card" style="margin-bottom:10px;">
+      <label for="quickDocDate-${patient.patientId}">Behandlungsdatum</label>
+      <input id="quickDocDate-${patient.patientId}" class="quickDocDateInput" type="text" value="${escapeHtml(formatCurrentDateShort())}" placeholder="TT.MM.JJJJ" inputmode="numeric">
+    </div>
+    ${quickDocRezepte.length === 0 ? `<p class="muted">Keine Rezepte für SchnellDoku vorhanden.</p>` : quickDocRezepte.length === 1 ? `
+      <div class="compact-card" style="margin-bottom:10px;">
+        <div style="font-weight:600; margin-bottom:6px;">Zielrezept vom: ${escapeHtml(quickDocRezepte[0].ausstell || "—")}</div>
+        <div class="compact-meta">${escapeHtml(rezeptSummary(quickDocRezepte[0]))}</div>
+      </div>
+    ` : `
+      <div class="compact-card" style="margin-bottom:10px;">
+        <div style="font-weight:600; margin-bottom:6px;">Zielrezept auswählen</div>
+        <div class="list-stack">
+          ${quickDocRezepte.map(rezept => `
+            <label class="check-chip quick-doc-chip" data-patient-id="${patient.patientId}" data-rezept-id="${rezept.rezeptId}" style="flex:1 1 auto;">
+              <input class="quickDocRezeptCheck" type="checkbox" data-patient-id="${patient.patientId}" data-rezept-id="${rezept.rezeptId}">
+              <span>
+                <strong>Zielrezept vom: ${escapeHtml(rezept.ausstell || "—")}</strong><br>
+                <span class="muted">${escapeHtml(rezeptSummary(rezept))}</span>
+              </span>
+            </label>
+          `).join("")}
+        </div>
+      </div>
+    `}
+
+    <label for="quickDocText-${patient.patientId}">Dokumentation</label>
+    <div class="compact-card" style="margin-bottom:10px; padding:14px;">
+      <textarea id="quickDocText-${patient.patientId}" rows="4" placeholder="Dokumentation direkt zum Rezept speichern" style="width:100%; border:none; outline:none; resize:vertical; background:transparent; font:inherit; color:inherit; min-height:96px;"></textarea>
+    </div>
+    <button class="saveQuickDocBtn" data-patient-id="${patient.patientId}" ${quickDocRezepte.length===0?'disabled':''}>SchnellDoku speichern</button>
+    <div id="quickDocMsg-${patient.patientId}"></div>
+  `;
+}
+
+function bindQuickDocHandlers({ homeId, patient, onSaved }) {
+  const patientId = patient.patientId;
+
+  const dateInputEl = document.getElementById(`quickDocDate-${patientId}`);
+  if (dateInputEl) bindDateAutoFormat(dateInputEl);
+
+  document.querySelectorAll(`.quickDocRezeptCheck[data-patient-id="${patientId}"]`).forEach((check) => {
+    check.addEventListener('change', () => {
+      if (!check.checked) return;
+      document.querySelectorAll(`.quickDocRezeptCheck[data-patient-id="${patientId}"]`).forEach((other) => {
+        if (other !== check) other.checked = false;
+      });
+    });
+  });
+
+  const btn = document.querySelector(`.saveQuickDocBtn[data-patient-id="${patientId}"]`);
+  if (!btn) return;
+
+  btn.onclick = async () => {
+    const rezepte = sortRezepteForDisplay(patient?.rezepte || []).filter((rezept) => rezept.abgegeben !== true);
+    const msg = document.getElementById(`quickDocMsg-${patientId}`);
+    const text = document.getElementById(`quickDocText-${patientId}`).value.trim();
+
+    msg.className = 'error';
+    msg.textContent = '';
+
+    let targetRezeptId = '';
+    if (rezepte.length === 1) {
+      targetRezeptId = rezepte[0].rezeptId;
+    } else {
+      const checked = document.querySelector(`.quickDocRezeptCheck[data-patient-id="${patientId}"]:checked`);
+      if (!checked) {
+        msg.textContent = 'Bitte genau ein Rezept auswählen.';
+        return;
+      }
+      targetRezeptId = checked.dataset.rezeptId;
+    }
+
+    try {
+      const dateInput = document.getElementById(`quickDocDate-${patientId}`);
+      const quickDate = normalizeDeDateInput(dateInput?.value || '') || formatCurrentDateShort();
+      if (!parseDeDate(quickDate)) {
+        msg.textContent = 'Bitte ein gültiges Behandlungsdatum im Format TT.MM.JJJJ eingeben.';
+        return;
+      }
+
+      createRezeptEntry(homeId, patientId, targetRezeptId, {
+        date: quickDate,
+        text
+      });
+      await queuePersistRuntimeData();
+      onSaved();
+    } catch (err) {
+      console.error(err);
+      msg.textContent = 'SchnellDoku konnte nicht gespeichert werden.';
+    }
+  };
+}
+
+// Dashboard-Button "Doku": Patientenliste einrichtungsübergreifend,
+// alphabetisch, mit Suchfeld - Klick auf einen Patienten führt direkt zum
+// SchnellDoku-Schreibfeld (showDokuSchreibenView), ohne den Umweg über
+// Einrichtungen -> Einrichtung -> Patient. Der bisherige Weg über die
+// Einrichtung bleibt zusätzlich bestehen (Vorgabe: "Beide Wege behalten").
+export function showDokuPatientenListeView({ onLock, searchText = "" } = {}) {
+  bindLockButton(onLock);
+  setCurrentView("doku-patienten-liste", { searchText });
+
+  const runtimeData = getRuntimeData();
+  const q = String(searchText || "").trim().toLowerCase();
+  const allPatients = collectAllPatients(runtimeData)
+    .filter(({ patient, homeName }) => {
+      if (!q) return true;
+      const haystack = [patient.firstName, patient.lastName, patient.birthDate, homeName].join(" ").toLowerCase();
+      return haystack.includes(q);
+    });
+
+  render(`
+    <div class="card">
+      <h2>Doku</h2>
+      <p class="muted">${allPatients.length} Patient(en) über alle Einrichtungen, alphabetisch sortiert.</p>
+      <button id="backDashboardBtn" class="secondary">Zurück zum Dashboard</button>
+    </div>
+
+    <div class="card">
+      <label for="dokuPatientenSearch">Suche nach Name, Geburtsdatum oder Einrichtung</label>
+      <input id="dokuPatientenSearch" type="text" value="${escapeHtml(searchText)}" placeholder="z.B. Müller oder Heim Sonnenschein">
+      <div class="row">
+        <button id="runDokuPatientenSearchBtn" class="secondary">Suchen</button>
+        <button id="clearDokuPatientenSearchBtn" class="secondary">Suche löschen</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="list-stack">
+        ${allPatients.length === 0 ? `<p class="muted">Keine passenden Patienten gefunden.</p>` : ""}
+        ${allPatients.map(({ patient, homeId, homeName }) => `
+          <button class="openDokuSchreibenBtn compact-card" style="text-align:left; width:100%; border:none; cursor:pointer;" data-home-id="${escapeHtml(homeId)}" data-patient-id="${escapeHtml(patient.patientId)}">
+            <div style="font-weight:600;">${escapeHtml(formatPatientName(patient) || "Ohne Namen")}</div>
+            <div class="compact-meta">${escapeHtml(homeName)}${patient.birthDate ? ` · geb. ${escapeHtml(patient.birthDate)}` : ""}</div>
+          </button>
+        `).join("")}
+      </div>
+    </div>
+  `);
+
+  document.getElementById("backDashboardBtn").onclick = () => showDashboardView({ onLock });
+
+  const runSearch = () => {
+    showDokuPatientenListeView({ onLock, searchText: document.getElementById("dokuPatientenSearch").value });
+  };
+  document.getElementById("runDokuPatientenSearchBtn").onclick = runSearch;
+  document.getElementById("dokuPatientenSearch").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") runSearch();
+  });
+  document.getElementById("clearDokuPatientenSearchBtn").onclick = () => {
+    showDokuPatientenListeView({ onLock, searchText: "" });
+  };
+
+  document.querySelectorAll(".openDokuSchreibenBtn").forEach((btn) => {
+    btn.onclick = () => {
+      showDokuSchreibenView({ onLock, homeId: btn.dataset.homeId, patientId: btn.dataset.patientId, searchText });
+    };
+  });
+}
+
+// Direktes SchnellDoku-Schreibfeld für einen Patienten, ohne Einrichtungs-
+// Umweg - siehe showDokuPatientenListeView() oben. Nutzt dieselben
+// renderQuickDocFields()/bindQuickDocHandlers()-Bausteine wie die
+// SchnellDoku in showHomeDetailView.
+export function showDokuSchreibenView({ onLock, homeId, patientId, searchText = "" }) {
+  bindLockButton(onLock);
+  setCurrentView("doku-schreiben", { homeId, patientId, searchText });
+
+  const runtimeData = getRuntimeData();
+  const home = getHomeById(runtimeData, homeId);
+  const patient = home ? getPatientById(home, patientId) : null;
+
+  if (!home || !patient) {
+    render(`
+      <div class="card">
+        <p class="error">Patient nicht gefunden.</p>
+        <button id="backDokuListeBtn" class="secondary">Zurück zur Patientenliste</button>
+      </div>
+    `);
+    document.getElementById("backDokuListeBtn").onclick = () => showDokuPatientenListeView({ onLock, searchText });
+    return;
+  }
+
+  render(`
+    <div class="card">
+      <h2>Doku – ${escapeHtml(formatPatientName(patient) || "Ohne Namen")}</h2>
+      <div class="compact-meta" style="margin-bottom:8px;">${escapeHtml(home.name || "")}</div>
+      <button id="backDokuListeBtn" class="secondary">Zurück zur Patientenliste</button>
+    </div>
+
+    <div class="card">
+      ${renderQuickDocFields(patient)}
+    </div>
+  `);
+
+  document.getElementById("backDokuListeBtn").onclick = () => showDokuPatientenListeView({ onLock, searchText });
+
+  bindQuickDocHandlers({
+    homeId,
+    patient,
+    onSaved: () => {
+      showToast("Dokumentation gespeichert");
+      showDokuSchreibenView({ onLock, homeId, patientId, searchText });
+    }
+  });
+}
+
 export function showHomeDetailView({ onLock, homeId, searchText = "" }) {
   bindLockButton(onLock);
   setCurrentView("home-detail", { homeId, searchText });
@@ -3546,7 +3831,6 @@ export function showHomeDetailView({ onLock, homeId, searchText = "" }) {
         ${filteredPatients.length === 0 ? `<p class="muted">Keine passenden Patienten gefunden.</p>` : ""}
         ${filteredPatients.map(patient => {
           const rezepte = sortRezepteForDisplay(patient.rezepte || []);
-          const quickDocRezepte = rezepte.filter((rezept) => rezept.abgegeben !== true);
           return `
             <details class="accordion">
               <summary>
@@ -3605,38 +3889,7 @@ export function showHomeDetailView({ onLock, homeId, searchText = "" }) {
                 </div>
 
                 <div id="patient-schnelldoku-${patient.patientId}" class="patient-inline-section" style="display:none; margin-bottom:12px;">
-                  <div class="compact-card" style="margin-bottom:10px;">
-                    <label for="quickDocDate-${patient.patientId}">Behandlungsdatum</label>
-                    <input id="quickDocDate-${patient.patientId}" class="quickDocDateInput" type="text" value="${escapeHtml(formatCurrentDateShort())}" placeholder="TT.MM.JJJJ" inputmode="numeric">
-                  </div>
-                  ${quickDocRezepte.length === 0 ? `<p class="muted">Keine Rezepte für SchnellDoku vorhanden.</p>` : quickDocRezepte.length === 1 ? `
-                    <div class="compact-card" style="margin-bottom:10px;">
-                      <div style="font-weight:600; margin-bottom:6px;">Zielrezept vom: ${escapeHtml(quickDocRezepte[0].ausstell || "—")}</div>
-                      <div class="compact-meta">${escapeHtml(rezeptSummary(quickDocRezepte[0]))}</div>
-                    </div>
-                  ` : `
-                    <div class="compact-card" style="margin-bottom:10px;">
-                      <div style="font-weight:600; margin-bottom:6px;">Zielrezept auswählen</div>
-                      <div class="list-stack">
-                        ${quickDocRezepte.map(rezept => `
-                          <label class="check-chip quick-doc-chip" data-patient-id="${patient.patientId}" data-rezept-id="${rezept.rezeptId}" style="flex:1 1 auto;">
-                            <input class="quickDocRezeptCheck" type="checkbox" data-patient-id="${patient.patientId}" data-rezept-id="${rezept.rezeptId}">
-                            <span>
-                              <strong>Zielrezept vom: ${escapeHtml(rezept.ausstell || "—")}</strong><br>
-                              <span class="muted">${escapeHtml(rezeptSummary(rezept))}</span>
-                            </span>
-                          </label>
-                        `).join("")}
-                      </div>
-                    </div>
-                  `}
-
-                  <label for="quickDocText-${patient.patientId}">Dokumentation</label>
-                  <div class="compact-card" style="margin-bottom:10px; padding:14px;">
-                    <textarea id="quickDocText-${patient.patientId}" rows="4" placeholder="Dokumentation direkt zum Rezept speichern" style="width:100%; border:none; outline:none; resize:vertical; background:transparent; font:inherit; color:inherit; min-height:96px;"></textarea>
-                  </div>
-                  <button class="saveQuickDocBtn" data-patient-id="${patient.patientId}" ${quickDocRezepte.length===0?'disabled':''}>SchnellDoku speichern</button>
-                  <div id="quickDocMsg-${patient.patientId}"></div>
+                  ${renderQuickDocFields(patient)}
                 </div>
 
                 <div id="patient-stammdaten-${patient.patientId}" class="patient-inline-section" style="display:none;">
@@ -3731,60 +3984,12 @@ export function showHomeDetailView({ onLock, homeId, searchText = "" }) {
     };
   });
 
-  document.querySelectorAll('.quickDocDateInput').forEach((input) => bindDateAutoFormat(input));
-
-  document.querySelectorAll('.quickDocRezeptCheck').forEach((check) => {
-    check.addEventListener('change', () => {
-      if (!check.checked) return;
-      const patientId = check.dataset.patientId;
-      document.querySelectorAll(`.quickDocRezeptCheck[data-patient-id="${patientId}"]`).forEach((other) => {
-        if (other !== check) other.checked = false;
-      });
+  filteredPatients.forEach((patient) => {
+    bindQuickDocHandlers({
+      homeId,
+      patient,
+      onSaved: () => showHomeDetailView({ onLock, homeId, searchText })
     });
-  });
-
-  document.querySelectorAll('.saveQuickDocBtn').forEach((btn) => {
-    btn.onclick = async () => {
-      const patientId = btn.dataset.patientId;
-      const patient = getPatientById(home, patientId);
-      const rezepte = sortRezepteForDisplay(patient?.rezepte || []).filter((rezept) => rezept.abgegeben !== true);
-      const msg = document.getElementById(`quickDocMsg-${patientId}`);
-      const text = document.getElementById(`quickDocText-${patientId}`).value.trim();
-
-      msg.className = 'error';
-      msg.textContent = '';
-
-      let targetRezeptId = '';
-      if (rezepte.length === 1) {
-        targetRezeptId = rezepte[0].rezeptId;
-      } else {
-        const checked = document.querySelector(`.quickDocRezeptCheck[data-patient-id="${patientId}"]:checked`);
-        if (!checked) {
-          msg.textContent = 'Bitte genau ein Rezept auswählen.';
-          return;
-        }
-        targetRezeptId = checked.dataset.rezeptId;
-      }
-
-      try {
-        const dateInput = document.getElementById(`quickDocDate-${patientId}`);
-        const quickDate = normalizeDeDateInput(dateInput?.value || '') || formatCurrentDateShort();
-        if (!parseDeDate(quickDate)) {
-          msg.textContent = 'Bitte ein gültiges Behandlungsdatum im Format TT.MM.JJJJ eingeben.';
-          return;
-        }
-
-        createRezeptEntry(homeId, patientId, targetRezeptId, {
-          date: quickDate,
-          text
-        });
-        await queuePersistRuntimeData();
-        showHomeDetailView({ onLock, homeId, searchText });
-      } catch (err) {
-        console.error(err);
-        msg.textContent = 'SchnellDoku konnte nicht gespeichert werden.';
-      }
-    };
   });
 
   document.querySelectorAll('.savePatientDataBtn').forEach((btn) => {
@@ -4274,8 +4479,9 @@ export function showCreatePatientRezeptView({ onLock, homeId, searchText = "" })
         });
         createRezept(homeId, newPatientId, rezeptPayload);
         const arztAdresse = collectArztAdresseFromForm();
-        if (rezeptPayload.arzt && arztAdresse) {
-          upsertArztAdresse(rezeptPayload.arzt, arztAdresse);
+        const arztEmail = collectArztEmailFromForm();
+        if (rezeptPayload.arzt && (arztAdresse || arztEmail)) {
+          upsertArztAdresse(rezeptPayload.arzt, arztAdresse, arztEmail);
         }
 
         await queuePersistRuntimeData();
@@ -4477,13 +4683,7 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
   // eingegebenen Werte an.
   function resumeDraft(draft) {
     Object.assign(wizard, draft.wizard);
-    usedBranchShortcut = !!draft.usedBranchShortcut;
-
-    if (wizard.weiche === "neurologisch") stepBbs7();
-    else if (wizard.weiche === "orthopaedisch") stepSppb();
-    else if (wizard.weiche === "schwerstbetroffen") stepMrcSchwerst();
-    else if (usedBranchShortcut) stepBereichAuswahl();
-    else stepEbene0();
+    stepBbs14();
   }
 
   function renderFrage() {
@@ -4542,7 +4742,7 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
       return;
     }
 
-    document.getElementById("assessmentJetztBtn").onclick = () => stepBereichAuswahl();
+    document.getElementById("assessmentJetztBtn").onclick = () => stepBbs14();
     document.getElementById("assessmentSpaeterBtn").onclick = () => renderSpaeter();
     document.getElementById("assessmentAbbrechenBtn").onclick = () => weiter();
     if (hasExisting) {
@@ -4580,29 +4780,17 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
   }
 
   // ---------- Geführter Assessment-Wizard ----------
+  // Auf Nutzerwunsch reduziert auf ausschließlich den Berg-Balance-Test
+  // (vollständige 14-Item-Version, siehe modules/assessment.js BBS_ITEMS) -
+  // alle früheren Domänen (Ebene0, Barthel, Schmerz, TUG, Weichenscreen,
+  // BBS-7/RMI/MRC, SPPB/ROM, Kontrakturen/Dekubitus) wurden aus dem Wizard
+  // entfernt. Bereits vorhandene alte Assessments mit diesen Feldern bleiben
+  // unverändert in der Historie sichtbar (siehe extractAssessmentScores()).
   const wizard = {
     date: getComparableFromDate(new Date()),
-    ebene0: { orientierung: {}, gedaechtnis: "", kommunikation: "", kooperation: "" },
-    barthel: {},
-    schmerzTyp: "nrs",
-    nrs: null,
-    nrsNichtBeurteilbar: false,
-    besd: {},
-    tug: { sekunden: null, hilfsmittel: "", nichtDurchfuehrbar: false },
-    weiche: "",
-    neuro: { bbs7: {}, rmi: { antworten: [], beobachtung: false }, mrc: { position: patient.assessmentMrcPosition || "", gruppen: {}, spastik: "", nichtDurchfuehrbar: false } },
-    ortho: { sppb: { balance: {} }, schmerzLokalisation: { zonen: [], qualitaet: [] }, romAktiv: [] },
-    schwerst: { mrc: { gruppen: {}, spastik: "", nichtDurchfuehrbar: false }, kontrakturen: { vorhanden: false, liste: [] }, dekubitusrisiko: "", romPassiv: [], schmerzBeiBewegung: false, spastikWiderstand: false }
+    weiche: "bbs",
+    bbs14: {}
   };
-  let reviewBackStep = null;
-  // Auf Nutzerwunsch: statt immer die komplette Ebene-0/Barthel/Schmerz/TUG-
-  // Vorlaufstrecke zu durchlaufen, kann bei bereits bekannter Diagnose auch
-  // direkt in einen Bereich (orthopädisch/neurologisch/schwerstbetroffen)
-  // gesprungen werden - siehe stepBereichAuswahl(). Dieses Flag merkt sich,
-  // ob dieser Direktweg genutzt wurde, damit "Zurück" aus dem gewählten
-  // Bereich wieder zur Bereichsauswahl statt zum (dann leeren) Weichenscreen
-  // führt.
-  let usedBranchShortcut = false;
 
   // Zwischenspeichern: bei jedem Schrittwechsel wird der aktuelle Wizard-
   // Zustand in patient.assessmentDraft gesichert (fire-and-forget, blockiert
@@ -4613,7 +4801,6 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
     try {
       saveAssessmentDraft(homeId, patientId, {
         wizard: JSON.parse(JSON.stringify(wizard)),
-        usedBranchShortcut,
         stepTitle,
         updatedAt: new Date().toISOString()
       });
@@ -4655,736 +4842,74 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
     `);
   }
 
-  // Direkteinstieg: statt immer Ebene 0/Barthel/Schmerz/TUG zu durchlaufen,
-  // kann bei bereits bekannter Diagnose auch sofort in einen Bereich
-  // gesprungen werden (auf Nutzerwunsch ergänzt).
-  function stepBereichAuswahl() {
-    wizardCard("Wie möchten Sie starten?", `
-      <button type="button" id="stepFullFlowBtn" style="margin-bottom:16px;">Vollständige Erfassung (empfohlen)</button>
-      <p class="muted" style="margin-top:0;">Oder bei bereits bekannter Diagnose direkt in einen Bereich springen:</p>
-      <div class="list-stack">
-        ${Assessment.WEICHEN_OPTIONEN.map((opt) => `
-          <button type="button" class="secondary bereichDirektBtn" data-val="${opt.val}" style="text-align:left;">${escapeHtml(opt.label)}</button>
-        `).join("")}
-      </div>
-      <button id="wizardBack" class="secondary" style="margin-top:16px;">Zurück</button>
-    `);
-
-    document.getElementById("wizardBack").onclick = () => renderFrage();
-    document.getElementById("stepFullFlowBtn").onclick = () => {
-      usedBranchShortcut = false;
-      stepEbene0();
-    };
-    document.querySelectorAll(".bereichDirektBtn").forEach((btn) => {
-      btn.onclick = () => {
-        usedBranchShortcut = true;
-        wizard.weiche = btn.dataset.val;
-        if (wizard.weiche === "neurologisch") stepBbs7();
-        else if (wizard.weiche === "orthopaedisch") stepSppb();
-        else stepMrcSchwerst();
-      };
-    });
-  }
-
-  function stepEbene0() {
-    wizardCard("Ebene 0 – Kognitiver / psychischer Status", `
-      <h3>Orientierung</h3>
-      <div class="checkbox-row checkbox-row-column">
-        <label class="check-chip" style="justify-content:flex-start;"><input type="checkbox" id="orZeitlich" ${wizard.ebene0.orientierung.zeitlich ? "checked" : ""}> <span>zeitlich orientiert</span></label>
-        <label class="check-chip" style="justify-content:flex-start;"><input type="checkbox" id="orOertlich" ${wizard.ebene0.orientierung.oertlich ? "checked" : ""}> <span>örtlich orientiert</span></label>
-        <label class="check-chip" style="justify-content:flex-start;"><input type="checkbox" id="orPerson" ${wizard.ebene0.orientierung.person ? "checked" : ""}> <span>zur Person orientiert</span></label>
-        <label class="check-chip" style="justify-content:flex-start;"><input type="checkbox" id="orSituation" ${wizard.ebene0.orientierung.situation ? "checked" : ""}> <span>zur Situation orientiert</span></label>
-        <label class="check-chip" style="justify-content:flex-start;"><input type="checkbox" id="orNicht" ${wizard.ebene0.orientierung.nicht ? "checked" : ""}> <span>nicht orientiert</span></label>
-      </div>
-
-      <h3 style="margin-top:16px;">Gedächtnis</h3>
-      ${renderRadioGroup("gedaechtnis", Assessment.GEDAECHTNIS_OPTIONEN, wizard.ebene0.gedaechtnis)}
-
-      <h3 style="margin-top:16px;">Kommunikation</h3>
-      ${renderRadioGroup("kommunikation", Assessment.KOMMUNIKATION_OPTIONEN, wizard.ebene0.kommunikation)}
-
-      <h3 style="margin-top:16px;">Kooperation</h3>
-      ${renderRadioGroup("kooperation", Assessment.KOOPERATION_OPTIONEN, wizard.ebene0.kooperation)}
-
-      <div class="row" style="margin-top:16px;">
-        <button id="wizardAbbrechen" class="secondary">Abbrechen</button>
-        <button id="wizardNext">Weiter</button>
-      </div>
-    `);
-    bindCheckChipToggles(app);
-
-    document.getElementById("wizardAbbrechen").onclick = () => weiter();
-    document.getElementById("wizardNext").onclick = () => {
-      wizard.ebene0.orientierung = {
-        zeitlich: document.getElementById("orZeitlich").checked,
-        oertlich: document.getElementById("orOertlich").checked,
-        person: document.getElementById("orPerson").checked,
-        situation: document.getElementById("orSituation").checked,
-        nicht: document.getElementById("orNicht").checked
-      };
-      wizard.ebene0.gedaechtnis = getRadioValue("gedaechtnis");
-      wizard.ebene0.kommunikation = getRadioValue("kommunikation");
-      wizard.ebene0.kooperation = getRadioValue("kooperation");
-      wizard.schmerzTyp = Assessment.determineSchmerzTyp(wizard.ebene0);
-      stepBarthel();
-    };
-  }
-
-  function stepBarthel() {
-    wizardCard("Ebene 1 – Barthel-Index", `
-      <p class="muted">Beobachtung oder Befragung, auch fremdanamnestisch möglich.</p>
-      ${Assessment.BARTHEL_KATEGORIEN.map((kat) => `
-        <h4 style="margin-top:14px;">${escapeHtml(kat.label)}</h4>
-        ${renderPointGroup(`barthel-${kat.key}`, kat.options, wizard.barthel[kat.key])}
-      `).join("")}
-      <div class="row" style="margin-top:16px;">
-        <button id="wizardBack" class="secondary">Zurück</button>
-        <button id="wizardNext">Weiter</button>
-      </div>
-      <div id="wizardMsg" class="error"></div>
-    `, "barthel");
-    bindCheckChipToggles(app);
-
-    document.getElementById("wizardBack").onclick = () => stepEbene0();
-    document.getElementById("wizardNext").onclick = () => {
-      const msg = document.getElementById("wizardMsg");
-      const values = {};
-      for (const kat of Assessment.BARTHEL_KATEGORIEN) {
-        const raw = getRadioValue(`barthel-${kat.key}`);
-        if (raw === "") {
-          msg.textContent = `Bitte "${kat.label}" ausfüllen.`;
-          return;
-        }
-        values[kat.key] = Number(raw);
-      }
-      wizard.barthel = values;
-      stepSchmerz();
-    };
-  }
-
-  function stepSchmerz() {
-    const isBesd = wizard.schmerzTyp === "besd";
-    wizardCard(`Schmerzerfassung (${isBesd ? "BESD" : "NRS"})`, `
-      ${isBesd ? `
-        <p class="muted">Beobachtung des Patienten für ca. 2 Minuten, idealerweise bei Bewegung oder Lagerung.</p>
-        ${Assessment.BESD_KATEGORIEN.map((kat) => `
-          <h4 style="margin-top:14px;">${escapeHtml(kat.label)}</h4>
-          ${renderRadioGroup(`besd-${kat.key}`, kat.stufen.map((label, idx) => ({ val: idx, label })), wizard.besd[kat.key])}
-        `).join("")}
-      ` : `
-        <p>„Wie stark sind Ihre Schmerzen gerade, von 0 bis 10? 0 = kein Schmerz, 10 = schlimmster vorstellbarer Schmerz."</p>
-        <label class="check-chip" style="justify-content:flex-start; margin-bottom:10px;"><input type="checkbox" id="nrsNichtBeurteilbar" ${wizard.nrsNichtBeurteilbar ? "checked" : ""}> <span>Nicht beurteilbar</span></label>
-        <div id="nrsInputWrap" style="${wizard.nrsNichtBeurteilbar ? "display:none;" : ""}">
-          <label for="nrsInput">Wert (0–10)</label>
-          <input id="nrsInput" type="number" min="0" max="10" step="1" value="${wizard.nrs ?? ""}">
-        </div>
-      `}
-      <div class="row" style="margin-top:16px;">
-        <button id="wizardBack" class="secondary">Zurück</button>
-        <button id="wizardNext">Weiter</button>
-      </div>
-      <div id="wizardMsg" class="error"></div>
-    `, isBesd ? "besd" : "nrs");
-    bindCheckChipToggles(app);
-
-    document.getElementById("nrsNichtBeurteilbar")?.addEventListener("change", (e) => {
-      document.getElementById("nrsInputWrap").style.display = e.target.checked ? "none" : "block";
-    });
-
-    document.getElementById("wizardBack").onclick = () => stepBarthel();
-    document.getElementById("wizardNext").onclick = () => {
-      const msg = document.getElementById("wizardMsg");
-      if (isBesd) {
-        const values = {};
-        for (const kat of Assessment.BESD_KATEGORIEN) {
-          const raw = getRadioValue(`besd-${kat.key}`);
-          if (raw === "") {
-            msg.textContent = `Bitte "${kat.label}" ausfüllen.`;
-            return;
-          }
-          values[kat.key] = Number(raw);
-        }
-        wizard.besd = values;
-      } else {
-        const nichtBeurteilbar = document.getElementById("nrsNichtBeurteilbar").checked;
-        if (nichtBeurteilbar) {
-          wizard.nrs = null;
-          wizard.nrsNichtBeurteilbar = true;
-        } else {
-          const raw = document.getElementById("nrsInput").value.trim();
-          if (raw === "" || Number(raw) < 0 || Number(raw) > 10) {
-            msg.textContent = "Bitte einen Wert zwischen 0 und 10 eingeben oder 'Nicht beurteilbar' ankreuzen.";
-            return;
-          }
-          wizard.nrs = Number(raw);
-          wizard.nrsNichtBeurteilbar = false;
-        }
-      }
-      stepTug();
-    };
-  }
-
-  function stepTug() {
-    wizardCard("Timed Up & Go (TUG)", `
-      <p class="muted">Aufstehen → 3 Meter gehen → umdrehen → zurückgehen → hinsetzen. Stoppuhr bei vollständigem Hinsetzen anhalten.</p>
-      <label class="check-chip" style="justify-content:flex-start;"><input type="checkbox" id="tugNichtDurchfuehrbar" ${wizard.tug.nichtDurchfuehrbar ? "checked" : ""}> <span>Nicht durchführbar</span></label>
-
-      <div id="tugFieldsWrap" style="${wizard.tug.nichtDurchfuehrbar ? "display:none;" : ""}">
-        <label for="tugSekunden">Zeit (Sekunden)</label>
-        <input id="tugSekunden" type="number" min="0" step="0.1" value="${wizard.tug.sekunden ?? ""}">
-        <label for="tugHilfsmittel">Hilfsmittel</label>
-        <input id="tugHilfsmittel" type="text" placeholder="z.B. Rollator, Gehstock, keins" value="${escapeHtml(wizard.tug.hilfsmittel || "")}">
-      </div>
-
-      <div class="row" style="margin-top:16px;">
-        <button id="wizardBack" class="secondary">Zurück</button>
-        <button id="wizardNext">Weiter</button>
-      </div>
-      <div id="wizardMsg" class="error"></div>
-    `, "tug");
-    bindCheckChipToggles(app);
-
-    document.getElementById("tugNichtDurchfuehrbar").addEventListener("change", (e) => {
-      document.getElementById("tugFieldsWrap").style.display = e.target.checked ? "none" : "block";
-    });
-
-    document.getElementById("wizardBack").onclick = () => stepSchmerz();
-    document.getElementById("wizardNext").onclick = () => {
-      const msg = document.getElementById("wizardMsg");
-      const nichtDurchfuehrbar = document.getElementById("tugNichtDurchfuehrbar").checked;
-      if (nichtDurchfuehrbar) {
-        wizard.tug = { sekunden: null, hilfsmittel: "", nichtDurchfuehrbar: true };
-        wizard.weiche = "schwerstbetroffen";
-        stepMrcSchwerst();
-        return;
-      }
-      const sekunden = document.getElementById("tugSekunden").value.trim();
-      if (sekunden === "" || Number(sekunden) < 0) {
-        msg.textContent = "Bitte eine gültige Zeit eingeben oder 'Nicht durchführbar' ankreuzen.";
-        return;
-      }
-      wizard.tug = {
-        sekunden: Number(sekunden),
-        hilfsmittel: document.getElementById("tugHilfsmittel").value.trim(),
-        nichtDurchfuehrbar: false
-      };
-      stepWeichenscreen();
-    };
-  }
-
-  function stepWeichenscreen() {
-    wizardCard("Weichenscreen", `
-      <p class="muted">Bitte den passenden Schwerpunkt für die weiteren Tests auswählen.</p>
-      <div class="list-stack">
-        ${Assessment.WEICHEN_OPTIONEN.map((opt) => `
-          <button type="button" class="secondary weichenBtn" data-val="${opt.val}" style="text-align:left;">${escapeHtml(opt.label)}</button>
-        `).join("")}
-      </div>
-      <button id="wizardBack" class="secondary" style="margin-top:16px;">Zurück</button>
-    `);
-
-    document.getElementById("wizardBack").onclick = () => stepTug();
-    document.querySelectorAll(".weichenBtn").forEach((btn) => {
-      btn.onclick = () => {
-        wizard.weiche = btn.dataset.val;
-        if (wizard.weiche === "neurologisch") stepBbs7();
-        else if (wizard.weiche === "orthopaedisch") stepSppb();
-        else stepMrcSchwerst();
-      };
-    });
-  }
-
-  // ---------- Ebene 2a: Neurologisch ----------
-  function stepBbs7() {
-    wizardCard("BBS-7 (Berg Balance Scale Kurzform)", `
-      ${Assessment.BBS7_ITEMS.map((item) => {
-        const entry = wizard.neuro.bbs7[item.key] || {};
+  // ---------- Berg-Balance-Test (vollständige 14-Item-Version) ----------
+  function stepBbs14() {
+    wizardCard("Berg-Balance-Test", `
+      <p class="muted">Jedes Item wird mit 0-4 Punkten bewertet - die Bedeutung jeder Punktzahl steht direkt beim jeweiligen Item.</p>
+      ${Assessment.BBS_ITEMS.map((item, idx) => {
+        const entry = wizard.bbs14[item.key] || {};
         return `
           <div class="compact-card" style="margin-bottom:8px;">
-            <div style="font-weight:600; margin-bottom:6px;">${escapeHtml(item.label)}</div>
+            <div style="font-weight:600; margin-bottom:4px;">${idx + 1}. ${escapeHtml(item.label)}</div>
+            <div class="compact-meta" style="margin-bottom:8px;">${escapeHtml(item.aufgabe)}</div>
             <label class="check-chip" style="justify-content:flex-start; margin-bottom:6px;">
-              <input type="checkbox" class="bbs7-nd" data-key="${item.key}" ${entry.nichtDurchfuehrbar ? "checked" : ""}> <span>Nicht durchführbar</span>
+              <input type="checkbox" class="bbs14-nd" data-key="${item.key}" ${entry.nichtDurchfuehrbar ? "checked" : ""}> <span>Nicht durchführbar</span>
             </label>
-            <div class="bbs7-score-wrap-${item.key}" style="${entry.nichtDurchfuehrbar ? "display:none;" : ""}">
-              ${renderRadioGroup(`bbs7-${item.key}`, [0, 1, 2, 3, 4].map((n) => ({ val: n, label: String(n) })), entry.score)}
+            <div class="bbs14-score-wrap-${item.key}" style="${entry.nichtDurchfuehrbar ? "display:none;" : ""}">
+              <div class="list-stack">
+                ${item.scores.map((s) => `
+                  <label class="check-chip" style="justify-content:flex-start; margin-bottom:4px;">
+                    <input type="radio" name="bbs14-${item.key}" value="${s.val}" ${Number(entry.score) === s.val ? "checked" : ""}>
+                    <span><strong>${s.val}</strong> – ${escapeHtml(s.text)}</span>
+                  </label>
+                `).join("")}
+              </div>
             </div>
           </div>
         `;
       }).join("")}
       <div class="row" style="margin-top:16px;">
-        <button id="wizardBack" class="secondary">Zurück</button>
+        <button id="wizardAbbrechen" class="secondary">Abbrechen</button>
         <button id="wizardNext">Weiter</button>
       </div>
       <div id="wizardMsg" class="error"></div>
-    `, "bbs7");
+    `, "bbs14");
     bindCheckChipToggles(app);
-    document.querySelectorAll(".bbs7-nd").forEach((cb) => {
+    document.querySelectorAll(".bbs14-nd").forEach((cb) => {
       cb.addEventListener("change", () => {
-        document.querySelector(`.bbs7-score-wrap-${cb.dataset.key}`).style.display = cb.checked ? "none" : "block";
+        document.querySelector(`.bbs14-score-wrap-${cb.dataset.key}`).style.display = cb.checked ? "none" : "block";
       });
     });
 
-    document.getElementById("wizardBack").onclick = () => (usedBranchShortcut ? stepBereichAuswahl() : stepWeichenscreen());
+    document.getElementById("wizardAbbrechen").onclick = () => weiter();
     document.getElementById("wizardNext").onclick = () => {
       const msg = document.getElementById("wizardMsg");
       const result = {};
-      for (const item of Assessment.BBS7_ITEMS) {
-        const nd = document.querySelector(`.bbs7-nd[data-key="${item.key}"]`).checked;
+      for (const item of Assessment.BBS_ITEMS) {
+        const nd = document.querySelector(`.bbs14-nd[data-key="${item.key}"]`).checked;
         if (nd) {
           result[item.key] = { score: null, nichtDurchfuehrbar: true };
           continue;
         }
-        const raw = getRadioValue(`bbs7-${item.key}`);
+        const raw = getRadioValue(`bbs14-${item.key}`);
         if (raw === "") {
           msg.textContent = `Bitte "${item.label}" bewerten oder als nicht durchführbar markieren.`;
           return;
         }
         result[item.key] = { score: Number(raw), nichtDurchfuehrbar: false };
       }
-      wizard.neuro.bbs7 = result;
-      stepRmi();
-    };
-  }
-
-  function stepRmi() {
-    wizardCard("Rivermead Mobility Index (RMI)", `
-      ${Assessment.RMI_FRAGEN.map((frage, idx) => `
-        <div class="compact-card" style="margin-bottom:8px;">
-          <div style="font-weight:600; margin-bottom:6px;">${escapeHtml(frage)}</div>
-          ${renderRadioGroup(`rmi-${idx}`, [{ val: "ja", label: "Ja" }, { val: "nein", label: "Nein" }], wizard.neuro.rmi.antworten[idx] === true ? "ja" : wizard.neuro.rmi.antworten[idx] === false ? "nein" : "")}
-        </div>
-      `).join("")}
-      <div class="compact-card" style="margin-bottom:8px;">
-        <div style="font-weight:600; margin-bottom:6px;">Beobachtungsaufgabe: Patient geht 5 Meter ohne Hilfsmittel</div>
-        ${renderRadioGroup("rmi-beobachtung", [{ val: "ja", label: "Bestanden" }, { val: "nein", label: "Nicht bestanden" }], wizard.neuro.rmi.beobachtung ? "ja" : "nein")}
-      </div>
-      <div class="row" style="margin-top:16px;">
-        <button id="wizardBack" class="secondary">Zurück</button>
-        <button id="wizardNext">Weiter</button>
-      </div>
-      <div id="wizardMsg" class="error"></div>
-    `, "rmi");
-    bindCheckChipToggles(app);
-
-    document.getElementById("wizardBack").onclick = () => stepBbs7();
-    document.getElementById("wizardNext").onclick = () => {
-      const msg = document.getElementById("wizardMsg");
-      const antworten = [];
-      for (let idx = 0; idx < Assessment.RMI_FRAGEN.length; idx++) {
-        const raw = getRadioValue(`rmi-${idx}`);
-        if (raw === "") {
-          msg.textContent = "Bitte alle Fragen beantworten.";
-          return;
-        }
-        antworten.push(raw === "ja");
-      }
-      const beob = getRadioValue("rmi-beobachtung");
-      wizard.neuro.rmi = { antworten, beobachtung: beob === "ja" };
-      stepMrcNeuro();
-    };
-  }
-
-  function stepMrcNeuro() {
-    const positionFixed = !!patient.assessmentMrcPosition;
-    wizardCard("MRC Scale (Muskelkraftprüfung)", `
-      <label>Testposition</label>
-      ${positionFixed
-        ? `<p><strong>${wizard.neuro.mrc.position === "liegen" ? "Liegen" : "Sitzen"}</strong> (für diesen Patienten fixiert seit Erstassessment)</p>`
-        : renderRadioGroup("mrcPosition", [{ val: "sitzen", label: "Sitzen" }, { val: "liegen", label: "Liegen" }], wizard.neuro.mrc.position)
-      }
-
-      <label class="check-chip" style="justify-content:flex-start; margin-bottom:12px;">
-        <input type="checkbox" id="mrcNichtDurchfuehrbar" ${wizard.neuro.mrc.nichtDurchfuehrbar ? "checked" : ""}>
-        <span>MRC nicht durchführbar (Patient kann Aufforderungen nicht folgen)</span>
-      </label>
-      <div id="mrcGruppenWrap" style="${wizard.neuro.mrc.nichtDurchfuehrbar ? "display:none;" : ""}">
-        ${Assessment.MRC_GRUPPEN.map((g) => `
-          <h4 style="margin-top:14px;">${escapeHtml(g.label)}</h4>
-          <div class="row">
-            <div style="flex:1;">
-              <label>Links</label>
-              ${renderPointGroup(`mrc-${g.key}-links`, [0, 1, 2, 3, 4, 5], wizard.neuro.mrc.gruppen?.[g.key]?.links)}
-            </div>
-            <div style="flex:1;">
-              <label>Rechts</label>
-              ${renderPointGroup(`mrc-${g.key}-rechts`, [0, 1, 2, 3, 4, 5], wizard.neuro.mrc.gruppen?.[g.key]?.rechts)}
-            </div>
-          </div>
-        `).join("")}
-
-        <h4 style="margin-top:14px;">Spastik</h4>
-        ${renderRadioGroup("spastikNeuro", Assessment.SPASTIK_OPTIONEN, wizard.neuro.mrc.spastik)}
-      </div>
-
-      <div class="row" style="margin-top:16px;">
-        <button id="wizardBack" class="secondary">Zurück</button>
-        <button id="wizardNext">Weiter zur Zusammenfassung</button>
-      </div>
-      <div id="wizardMsg" class="error"></div>
-    `, "mrc");
-    bindCheckChipToggles(app);
-
-    document.getElementById("mrcNichtDurchfuehrbar").addEventListener("change", (e) => {
-      document.getElementById("mrcGruppenWrap").style.display = e.target.checked ? "none" : "";
-    });
-
-    document.getElementById("wizardBack").onclick = () => stepRmi();
-    document.getElementById("wizardNext").onclick = () => {
-      const msg = document.getElementById("wizardMsg");
-      const position = positionFixed ? patient.assessmentMrcPosition : getRadioValue("mrcPosition");
-      if (!position) {
-        msg.textContent = "Bitte eine Testposition auswählen.";
-        return;
-      }
-      const nichtDurchfuehrbar = document.getElementById("mrcNichtDurchfuehrbar").checked;
-      const gruppen = {};
-      if (!nichtDurchfuehrbar) {
-        Assessment.MRC_GRUPPEN.forEach((g) => {
-          gruppen[g.key] = {
-            links: getRadioValue(`mrc-${g.key}-links`) || null,
-            rechts: getRadioValue(`mrc-${g.key}-rechts`) || null
-          };
-          if (gruppen[g.key].links !== null) gruppen[g.key].links = Number(gruppen[g.key].links);
-          if (gruppen[g.key].rechts !== null) gruppen[g.key].rechts = Number(gruppen[g.key].rechts);
-        });
-      }
-      wizard.neuro.mrc = { position, gruppen, spastik: nichtDurchfuehrbar ? "" : getRadioValue("spastikNeuro"), nichtDurchfuehrbar };
-      reviewBackStep = () => stepMrcNeuro();
+      wizard.bbs14 = result;
       stepReview();
     };
   }
 
-  // ---------- Ebene 2b: Orthopädisch ----------
-  function stepSppb() {
-    wizardCard("SPPB – Gleichgewicht", `
-      <p class="muted">Je 10 Sekunden halten.</p>
-      <label for="sppbSide">Füße nebeneinander (Sekunden gehalten)</label>
-      <input id="sppbSide" type="number" min="0" max="10" step="0.1" value="${wizard.ortho.sppb.balance.seitNebeneinanderSek ?? ""}">
-      <label for="sppbSemi">Semitandem (Sekunden gehalten)</label>
-      <input id="sppbSemi" type="number" min="0" max="10" step="0.1" value="${wizard.ortho.sppb.balance.semitandemSek ?? ""}">
-      <label for="sppbTandem">Tandem (Sekunden gehalten)</label>
-      <input id="sppbTandem" type="number" min="0" max="10" step="0.1" value="${wizard.ortho.sppb.balance.tandemSek ?? ""}">
-      <label class="check-chip" style="justify-content:flex-start; margin-top:10px;"><input type="checkbox" id="sppbBalanceNd" ${wizard.ortho.sppb.balance.nichtMoeglich ? "checked" : ""}> <span>Gleichgewichtstest nicht möglich</span></label>
-
-      <h3 style="margin-top:18px;">Gehgeschwindigkeit (4 Meter)</h3>
-      <label for="sppbGeh">Zeit (Sekunden)</label>
-      <input id="sppbGeh" type="number" min="0" step="0.1" value="${wizard.ortho.sppb.gehgeschwindigkeitSek ?? ""}">
-      <label for="sppbGehHilfsmittel">Hilfsmittel</label>
-      <input id="sppbGehHilfsmittel" type="text" value="${escapeHtml(wizard.ortho.sppb.hilfsmittel || "")}">
-      <label class="check-chip" style="justify-content:flex-start; margin-top:10px;"><input type="checkbox" id="sppbGehNd" ${wizard.ortho.sppb.gehgeschwindigkeitNichtMoeglich ? "checked" : ""}> <span>Nicht möglich</span></label>
-
-      <h3 style="margin-top:18px;">Chair Stand Test (5x aufstehen)</h3>
-      <label for="sppbChair">Zeit (Sekunden)</label>
-      <input id="sppbChair" type="number" min="0" step="0.1" value="${wizard.ortho.sppb.chairStandSek ?? ""}">
-      <label class="check-chip" style="justify-content:flex-start; margin-top:10px;"><input type="checkbox" id="sppbChairNd" ${wizard.ortho.sppb.chairStandNichtMoeglich ? "checked" : ""}> <span>Nicht möglich</span></label>
-
-      <div class="row" style="margin-top:16px;">
-        <button id="wizardBack" class="secondary">Zurück</button>
-        <button id="wizardNext">Weiter</button>
-      </div>
-    `, "sppb");
-    bindCheckChipToggles(app);
-
-    document.getElementById("wizardBack").onclick = () => (usedBranchShortcut ? stepBereichAuswahl() : stepWeichenscreen());
-    document.getElementById("wizardNext").onclick = () => {
-      wizard.ortho.sppb = {
-        balance: {
-          seitNebeneinanderSek: document.getElementById("sppbSide").value.trim() || null,
-          semitandemSek: document.getElementById("sppbSemi").value.trim() || null,
-          tandemSek: document.getElementById("sppbTandem").value.trim() || null,
-          nichtMoeglich: document.getElementById("sppbBalanceNd").checked
-        },
-        gehgeschwindigkeitSek: document.getElementById("sppbGeh").value.trim() || null,
-        gehgeschwindigkeitNichtMoeglich: document.getElementById("sppbGehNd").checked,
-        hilfsmittel: document.getElementById("sppbGehHilfsmittel").value.trim(),
-        chairStandSek: document.getElementById("sppbChair").value.trim() || null,
-        chairStandNichtMoeglich: document.getElementById("sppbChairNd").checked
-      };
-      stepSchmerzlokalisation();
-    };
-  }
-
-  function stepSchmerzlokalisation() {
-    wizardCard("Schmerzlokalisation + Qualität", `
-      <h3>Lokalisation</h3>
-      <p class="muted">Mehrfachauswahl möglich.</p>
-      ${renderCheckboxList("schmerzzone", Assessment.SCHMERZ_ZONEN, wizard.ortho.schmerzLokalisation.zonen)}
-
-      <h3 style="margin-top:16px;">Schmerzqualität</h3>
-      ${renderCheckboxList("schmerzqual", Assessment.SCHMERZ_QUALITAET_OPTIONEN, wizard.ortho.schmerzLokalisation.qualitaet)}
-
-      <div class="row" style="margin-top:16px;">
-        <button id="wizardBack" class="secondary">Zurück</button>
-        <button id="wizardNext">Weiter</button>
-      </div>
-    `);
-    bindCheckChipToggles(app);
-
-    document.getElementById("wizardBack").onclick = () => stepSppb();
-    document.getElementById("wizardNext").onclick = () => {
-      wizard.ortho.schmerzLokalisation = {
-        zonen: getCheckboxListValues("schmerzzone"),
-        qualitaet: getCheckboxListValues("schmerzqual")
-      };
-      stepRomAktivAuswahl();
-    };
-  }
-
-  function stepRomAktivAuswahl() {
-    const selected = new Set((wizard.ortho.romAktiv || []).map((r) => r.gelenk));
-    wizardCard("Aktive ROM – Gelenke auswählen", `
-      <p class="muted">Nur ausgewählte Gelenke werden getestet.</p>
-      <div class="checkbox-row checkbox-row-column">
-        ${Assessment.ROM_AKTIV_GELENKE.map((j) => `
-          <label class="check-chip" style="justify-content:flex-start; margin-bottom:6px;">
-            <input type="checkbox" class="romAktivSelect" value="${j.key}" ${selected.has(j.key) ? "checked" : ""}> <span>${escapeHtml(j.label)}</span>
-          </label>
-        `).join("")}
-      </div>
-      <div class="row" style="margin-top:16px;">
-        <button id="wizardBack" class="secondary">Zurück</button>
-        <button id="wizardNext">Weiter</button>
-      </div>
-    `);
-    bindCheckChipToggles(app);
-
-    document.getElementById("wizardBack").onclick = () => stepSchmerzlokalisation();
-    document.getElementById("wizardNext").onclick = () => {
-      const keys = Array.from(document.querySelectorAll(".romAktivSelect:checked")).map((el) => el.value);
-      if (keys.length === 0) {
-        wizard.ortho.romAktiv = [];
-        reviewBackStep = () => stepRomAktivAuswahl();
-        stepReview();
-        return;
-      }
-      stepRomAktivBewertung(keys);
-    };
-  }
-
-  function stepRomAktivBewertung(keys) {
-    const joints = Assessment.ROM_AKTIV_GELENKE.filter((j) => keys.includes(j.key));
-    const current = new Map((wizard.ortho.romAktiv || []).map((r) => [r.gelenk, r.bewertung]));
-    const currentGrad = new Map((wizard.ortho.romAktiv || []).map((r) => [r.gelenk, r.grad]));
-    wizardCard("Aktive ROM – Bewertung", `
-      ${joints.map((j) => renderRomJointRow(j, current.get(j.key), currentGrad.get(j.key))).join("")}
-      <div class="row" style="margin-top:16px;">
-        <button id="wizardBack" class="secondary">Zurück</button>
-        <button id="wizardNext">Weiter zur Zusammenfassung</button>
-      </div>
-      <div id="wizardMsg" class="error"></div>
-    `, "romAktiv");
-    bindCheckChipToggles(app);
-
-    document.getElementById("wizardBack").onclick = () => stepRomAktivAuswahl();
-    document.getElementById("wizardNext").onclick = () => {
-      const msg = document.getElementById("wizardMsg");
-      const results = collectRomJointResults(Assessment.ROM_AKTIV_GELENKE, keys);
-      if (results.length !== keys.length) {
-        msg.textContent = "Bitte alle ausgewählten Gelenke bewerten.";
-        return;
-      }
-      wizard.ortho.romAktiv = results;
-      reviewBackStep = () => stepRomAktivBewertung(keys);
-      stepReview();
-    };
-  }
-
-  // ---------- Ebene 2c: Schwerstbetroffene ----------
-  function stepMrcSchwerst() {
-    wizardCard("MRC Scale (im Liegen)", `
-      <label class="check-chip" style="justify-content:flex-start; margin-bottom:12px;">
-        <input type="checkbox" id="mrcSNichtDurchfuehrbar" ${wizard.schwerst.mrc.nichtDurchfuehrbar ? "checked" : ""}>
-        <span>MRC nicht durchführbar (Patient kann Aufforderungen nicht folgen)</span>
-      </label>
-      <div id="mrcSGruppenWrap" style="${wizard.schwerst.mrc.nichtDurchfuehrbar ? "display:none;" : ""}">
-        ${Assessment.MRC_GRUPPEN.map((g) => `
-          <h4 style="margin-top:14px;">${escapeHtml(g.label)}</h4>
-          <div class="row">
-            <div style="flex:1;">
-              <label>Links</label>
-              ${renderPointGroup(`mrcS-${g.key}-links`, [0, 1, 2, 3, 4, 5], wizard.schwerst.mrc.gruppen?.[g.key]?.links)}
-            </div>
-            <div style="flex:1;">
-              <label>Rechts</label>
-              ${renderPointGroup(`mrcS-${g.key}-rechts`, [0, 1, 2, 3, 4, 5], wizard.schwerst.mrc.gruppen?.[g.key]?.rechts)}
-            </div>
-          </div>
-        `).join("")}
-
-        <h4 style="margin-top:14px;">Spastik</h4>
-        ${renderRadioGroup("spastikSchwerst", Assessment.SPASTIK_OPTIONEN, wizard.schwerst.mrc.spastik)}
-      </div>
-
-      <div class="row" style="margin-top:16px;">
-        ${wizard.tug.nichtDurchfuehrbar ? `<button id="wizardBack" class="secondary">Zurück</button>` : `<button id="wizardBack" class="secondary">Zurück</button>`}
-        <button id="wizardNext">Weiter</button>
-      </div>
-    `, "mrc");
-    bindCheckChipToggles(app);
-
-    document.getElementById("mrcSNichtDurchfuehrbar").addEventListener("change", (e) => {
-      document.getElementById("mrcSGruppenWrap").style.display = e.target.checked ? "none" : "";
-    });
-
-    document.getElementById("wizardBack").onclick = () => (usedBranchShortcut ? stepBereichAuswahl() : (wizard.tug.nichtDurchfuehrbar ? stepTug() : stepWeichenscreen()));
-    document.getElementById("wizardNext").onclick = () => {
-      const nichtDurchfuehrbar = document.getElementById("mrcSNichtDurchfuehrbar").checked;
-      const gruppen = {};
-      if (!nichtDurchfuehrbar) {
-        Assessment.MRC_GRUPPEN.forEach((g) => {
-          gruppen[g.key] = {
-            links: getRadioValue(`mrcS-${g.key}-links`) || null,
-            rechts: getRadioValue(`mrcS-${g.key}-rechts`) || null
-          };
-          if (gruppen[g.key].links !== null) gruppen[g.key].links = Number(gruppen[g.key].links);
-          if (gruppen[g.key].rechts !== null) gruppen[g.key].rechts = Number(gruppen[g.key].rechts);
-        });
-      }
-      wizard.schwerst.mrc = { gruppen, spastik: nichtDurchfuehrbar ? "" : getRadioValue("spastikSchwerst"), nichtDurchfuehrbar };
-      stepKontrakturenDekubitus();
-    };
-  }
-
-  function stepKontrakturenDekubitus() {
-    wizardCard("Kontrakturen & Dekubitusrisiko", `
-      <label class="check-chip" style="justify-content:flex-start;"><input type="checkbox" id="kontrakturenVorhanden" ${wizard.schwerst.kontrakturen.vorhanden ? "checked" : ""}> <span>Kontrakturen vorhanden</span></label>
-      <div id="kontrakturenListWrap" style="${wizard.schwerst.kontrakturen.vorhanden ? "" : "display:none;"} margin-top:10px;">
-        ${renderCheckboxList("kontraktur", Assessment.KONTRAKTUR_GELENKE.map((k) => k.label), (wizard.schwerst.kontrakturen.liste || []).map((key) => Assessment.KONTRAKTUR_GELENKE.find((k) => k.key === key)?.label).filter(Boolean))}
-      </div>
-
-      <h3 style="margin-top:18px;">Dekubitusrisiko laut Pflegedokumentation</h3>
-      ${renderRadioGroup("dekubitusrisiko", [{ val: "ja", label: "Ja" }, { val: "nein", label: "Nein" }], wizard.schwerst.dekubitusrisiko)}
-
-      <div class="row" style="margin-top:16px;">
-        <button id="wizardBack" class="secondary">Zurück</button>
-        <button id="wizardNext">Weiter</button>
-      </div>
-      <div id="wizardMsg" class="error"></div>
-    `, "kontrakturenDekubitus");
-    bindCheckChipToggles(app);
-
-    document.getElementById("kontrakturenVorhanden").addEventListener("change", (e) => {
-      document.getElementById("kontrakturenListWrap").style.display = e.target.checked ? "block" : "none";
-    });
-
-    document.getElementById("wizardBack").onclick = () => stepMrcSchwerst();
-    document.getElementById("wizardNext").onclick = () => {
-      const msg = document.getElementById("wizardMsg");
-      const vorhanden = document.getElementById("kontrakturenVorhanden").checked;
-      const selectedLabels = vorhanden ? getCheckboxListValues("kontraktur") : [];
-      const liste = selectedLabels.map((label) => Assessment.KONTRAKTUR_GELENKE.find((k) => k.label === label)?.key).filter(Boolean);
-      const dekubitusrisiko = getRadioValue("dekubitusrisiko");
-      if (!dekubitusrisiko) {
-        msg.textContent = "Bitte Dekubitusrisiko angeben.";
-        return;
-      }
-      wizard.schwerst.kontrakturen = { vorhanden, liste };
-      wizard.schwerst.dekubitusrisiko = dekubitusrisiko;
-      stepRomPassivAuswahl();
-    };
-  }
-
-  function stepRomPassivAuswahl() {
-    const selected = new Set((wizard.schwerst.romPassiv || []).map((r) => r.gelenk));
-    wizardCard("Passive ROM – Gelenke auswählen", `
-      <p class="muted">Therapeut bewegt die Gelenke passiv. Nur ausgewählte Gelenke werden getestet.</p>
-      <div class="checkbox-row checkbox-row-column">
-        ${Assessment.ROM_PASSIV_GELENKE.map((j) => `
-          <label class="check-chip" style="justify-content:flex-start; margin-bottom:6px;">
-            <input type="checkbox" class="romPassivSelect" value="${j.key}" ${selected.has(j.key) ? "checked" : ""}> <span>${escapeHtml(j.label)}</span>
-          </label>
-        `).join("")}
-      </div>
-      <div class="row" style="margin-top:16px;">
-        <button id="wizardBack" class="secondary">Zurück</button>
-        <button id="wizardNext">Weiter</button>
-      </div>
-    `);
-    bindCheckChipToggles(app);
-
-    document.getElementById("wizardBack").onclick = () => stepKontrakturenDekubitus();
-    document.getElementById("wizardNext").onclick = () => {
-      const keys = Array.from(document.querySelectorAll(".romPassivSelect:checked")).map((el) => el.value);
-      stepRomPassivBewertung(keys);
-    };
-  }
-
-  function stepRomPassivBewertung(keys) {
-    const joints = Assessment.ROM_PASSIV_GELENKE.filter((j) => keys.includes(j.key));
-    const current = new Map((wizard.schwerst.romPassiv || []).map((r) => [r.gelenk, r.bewertung]));
-    const currentGrad = new Map((wizard.schwerst.romPassiv || []).map((r) => [r.gelenk, r.grad]));
-    wizardCard("Passive ROM – Bewertung", `
-      ${joints.map((j) => renderRomJointRow(j, current.get(j.key), currentGrad.get(j.key))).join("")}
-
-      <h4 style="margin-top:14px;">Zusätzliche Angaben</h4>
-      <label class="check-chip" style="justify-content:flex-start; margin-bottom:6px;"><input type="checkbox" id="schmerzBeiBewegung" ${wizard.schwerst.schmerzBeiBewegung ? "checked" : ""}> <span>Schmerz bei Bewegung</span></label>
-      <label class="check-chip" style="justify-content:flex-start;"><input type="checkbox" id="spastikWiderstand" ${wizard.schwerst.spastikWiderstand ? "checked" : ""}> <span>Spastik / Widerstand spürbar</span></label>
-
-      <div class="row" style="margin-top:16px;">
-        <button id="wizardBack" class="secondary">Zurück</button>
-        <button id="wizardNext">Weiter zur Zusammenfassung</button>
-      </div>
-      <div id="wizardMsg" class="error"></div>
-    `, "romPassiv");
-    bindCheckChipToggles(app);
-
-    document.getElementById("wizardBack").onclick = () => stepRomPassivAuswahl();
-    document.getElementById("wizardNext").onclick = () => {
-      const msg = document.getElementById("wizardMsg");
-      const results = collectRomJointResults(Assessment.ROM_PASSIV_GELENKE, keys);
-      if (results.length !== keys.length) {
-        msg.textContent = "Bitte alle ausgewählten Gelenke bewerten.";
-        return;
-      }
-      wizard.schwerst.romPassiv = results;
-      wizard.schwerst.schmerzBeiBewegung = document.getElementById("schmerzBeiBewegung").checked;
-      wizard.schwerst.spastikWiderstand = document.getElementById("spastikWiderstand").checked;
-      reviewBackStep = () => stepRomPassivBewertung(keys);
-      stepReview();
-    };
-  }
 
   // ---------- Zusammenfassung & Speichern ----------
   function stepReview() {
-    const barthelTotal = Assessment.computeBarthelTotal(wizard.barthel);
-    const schmerzLine = wizard.schmerzTyp === "besd"
-      ? `BESD: ${Assessment.computeBesdTotal(wizard.besd)}/${Assessment.BESD_MAX} – ${Assessment.classifyBesd(Assessment.computeBesdTotal(wizard.besd))}`
-      : wizard.nrsNichtBeurteilbar
-        ? "NRS: Nicht beurteilbar"
-        : `NRS: ${wizard.nrs}/10 – ${Assessment.classifyNrs(wizard.nrs)}`;
-
-    let ebeneSummary = "";
-    if (wizard.weiche === "neurologisch") {
-      const bbs = Assessment.computeBbs7(wizard.neuro.bbs7);
-      const rmiTotal = Assessment.computeRmiTotal(wizard.neuro.rmi.antworten, wizard.neuro.rmi.beobachtung);
-      const mrc = Assessment.computeMrcTotal(wizard.neuro.mrc.gruppen);
-      ebeneSummary = `
-        <p><strong>BBS-7:</strong> ${bbs.total}/${bbs.maxPossible} – ${escapeHtml(Assessment.classifyBbs7(bbs.total, bbs.maxPossible))}${bbs.notDurchfuehrbar ? ` (${bbs.notDurchfuehrbar} Item(s) nicht durchführbar)` : ""}</p>
-        <p><strong>RMI:</strong> ${rmiTotal}/${Assessment.RMI_MAX} – ${escapeHtml(Assessment.classifyRmi(rmiTotal))}</p>
-        <p><strong>MRC gesamt:</strong> ${mrc.total}/${mrc.max} (${mrc.count} bewertete Werte)</p>
-      `;
-    } else if (wizard.weiche === "orthopaedisch") {
-      const sppb = Assessment.computeSppbTotal(wizard.ortho.sppb);
-      ebeneSummary = `
-        <p><strong>SPPB:</strong> ${sppb.total}/${Assessment.SPPB_MAX} – ${escapeHtml(Assessment.classifySppb(sppb.total))}</p>
-        <p><strong>Schmerzzonen:</strong> ${escapeHtml(wizard.ortho.schmerzLokalisation.zonen.join(", ") || "—")}</p>
-        <p><strong>ROM aktiv:</strong> ${wizard.ortho.romAktiv.length} Gelenk(e) getestet</p>
-      `;
-    } else if (wizard.weiche === "schwerstbetroffen") {
-      const mrc = Assessment.computeMrcTotal(wizard.schwerst.mrc.gruppen);
-      ebeneSummary = `
-        <p><strong>MRC gesamt (liegend):</strong> ${mrc.total}/${mrc.max}</p>
-        <p><strong>Kontrakturen:</strong> ${wizard.schwerst.kontrakturen.vorhanden ? `${wizard.schwerst.kontrakturen.liste.length} Gelenk(e)` : "Keine"}</p>
-        <p><strong>Dekubitusrisiko:</strong> ${wizard.schwerst.dekubitusrisiko === "ja" ? "Ja" : "Nein"}</p>
-        <p><strong>ROM passiv:</strong> ${wizard.schwerst.romPassiv.length} Gelenk(e) getestet</p>
-      `;
-    }
+    const bbs = Assessment.computeBbsTotal(wizard.bbs14);
 
     wizardCard("Zusammenfassung", `
-      <p><strong>Barthel-Index:</strong> ${barthelTotal}/${Assessment.BARTHEL_MAX} – ${escapeHtml(Assessment.classifyBarthel(barthelTotal))}</p>
-      <p><strong>Schmerz:</strong> ${escapeHtml(schmerzLine)}</p>
-      <p><strong>TUG:</strong> ${wizard.tug.nichtDurchfuehrbar ? "Nicht durchführbar" : `${wizard.tug.sekunden}s – ${escapeHtml(Assessment.classifyTug(wizard.tug.sekunden))}`}</p>
-      ${ebeneSummary}
+      <p><strong>Berg-Balance-Test:</strong> ${bbs.total}/${bbs.maxPossible} – ${escapeHtml(Assessment.classifyBbs(bbs.total, bbs.maxPossible))}${bbs.notDurchfuehrbar ? ` (${bbs.notDurchfuehrbar} Item(s) nicht durchführbar)` : ""}</p>
 
       <div class="row" style="margin-top:16px;">
         <button id="wizardBack" class="secondary">Zurück</button>
@@ -5393,7 +4918,7 @@ export function showAssessmentAbfrageView({ onLock, homeId, patientId, searchTex
       <div id="wizardMsg" class="error"></div>
     `);
 
-    document.getElementById("wizardBack").onclick = () => (reviewBackStep ? reviewBackStep() : weiter());
+    document.getElementById("wizardBack").onclick = () => stepBbs14();
     document.getElementById("assessmentSpeichernBtn").onclick = async () => {
       const msg = document.getElementById("wizardMsg");
       try {
@@ -6082,8 +5607,9 @@ export function showCreateRezeptView({ onLock, homeId, patientId, prefill = null
     try {
       createRezept(homeId, patientId, payload);
       const arztAdresse = collectArztAdresseFromForm();
-      if (payload.arzt && arztAdresse) {
-        upsertArztAdresse(payload.arzt, arztAdresse);
+      const arztEmail = collectArztEmailFromForm();
+      if (payload.arzt && (arztAdresse || arztEmail)) {
+        upsertArztAdresse(payload.arzt, arztAdresse, arztEmail);
       }
 
       await queuePersistRuntimeData();
@@ -6112,6 +5638,7 @@ export function showEditRezeptView({ onLock, homeId, patientId, rezeptId, return
   const items = rezept.items || [];
   const arztRegistryForEdit = getArztRegistry(runtimeData);
   const currentArztAdresse = arztRegistryForEdit.find((a) => a.name === (rezept.arzt || ""))?.adresse || "";
+  const currentArztEmail = arztRegistryForEdit.find((a) => a.name === (rezept.arzt || ""))?.email || "";
 
   render(`
     <div class="card">
@@ -6126,7 +5653,7 @@ export function showEditRezeptView({ onLock, homeId, patientId, rezeptId, return
         ${getKnownDoctorNames(getRuntimeData()).map((name) => `<option value="${escapeHtml(name)}"></option>`).join("")}
       </datalist>
 
-      ${renderArztAdresseFields(currentArztAdresse)}
+      ${renderArztAdresseFields(currentArztAdresse, currentArztEmail)}
 
       <label for="ausstell">Ausstellungsdatum</label>
       <input id="ausstell" type="text" inputmode="numeric" value="${escapeHtml(rezept.ausstell || "")}">
@@ -6208,8 +5735,9 @@ export function showEditRezeptView({ onLock, homeId, patientId, rezeptId, return
         items: nextItems
       });
       const arztAdresse = collectArztAdresseFromForm();
-      if (payload.arzt && arztAdresse) {
-        upsertArztAdresse(payload.arzt, arztAdresse);
+      const arztEmail = collectArztEmailFromForm();
+      if (payload.arzt && (arztAdresse || arztEmail)) {
+        upsertArztAdresse(payload.arzt, arztAdresse, arztEmail);
       }
 
       await queuePersistRuntimeData();
@@ -6827,6 +6355,8 @@ export function showNachbestellungView({ onLock, doctorFilter = "", textFilter =
   const normalizedSelectedIds = normalizeSelectedRowIds(selectedIds, filteredRows);
   const tree = buildNachbestellTree(data, doctorFilter, textFilter);
   const selected = new Set(normalizedSelectedIds);
+  const therapistName = data?.settings?.therapistName || "";
+  const therapistEmail = data?.settings?.therapistEmail || "";
 
   setCurrentView("nachbestellung", { doctorFilter, textFilter, selectedIds: normalizedSelectedIds });
 
@@ -6908,7 +6438,8 @@ export function showNachbestellungView({ onLock, doctorFilter = "", textFilter =
         ${renderRadioGroup("nachbestellVersandart", [
           { val: "fax", label: "Per Fax an mich / Original zur Einrichtung" },
           { val: "abholen", label: "Ich hole die Rezepte selbst ab" },
-          { val: "post", label: "Original per Post an die Praxis" }
+          { val: "post", label: "Original per Post an die Praxis" },
+          { val: "email", label: "Per E-Mail an den Arzt senden" }
         ], "fax")}
         <div id="nachbestellAbholDatumWrap" style="display:none; margin-top:8px;">
           <label for="nachbestellAbholDatum">Abholdatum</label>
@@ -6919,6 +6450,7 @@ export function showNachbestellungView({ onLock, doctorFilter = "", textFilter =
       <div class="row" style="margin-top:12px;">
         <button id="createNachbestellLetterBtn">Nachbestellzettel erzeugen</button>
         <button id="printNachbestellSelectionBtn" class="secondary">Aktuelle Auswahl drucken</button>
+        <button id="mailNachbestellSelectionBtn" class="secondary">Per E-Mail an Arzt senden</button>
       </div>
 
       <div id="nachbestellMsg"></div>
@@ -7064,6 +6596,49 @@ export function showNachbestellungView({ onLock, doctorFilter = "", textFilter =
       openHtmlDocument(letterData.title, bodyHtml, { autoPrint: true });
     } catch (err) {
       alert(err?.message || 'Nachbestellzettel konnte nicht gedruckt werden.');
+    }
+  };
+
+  document.getElementById("mailNachbestellSelectionBtn").onclick = () => {
+    const msg = document.getElementById("nachbestellMsg");
+    msg.className = "error";
+    msg.textContent = "";
+
+    try {
+      const { letterData, bodyHtml, lines } = buildCurrentLetter();
+      const arztEmail = getArztRegistry(getRuntimeData()).find((a) => a.name === letterData.doctor)?.email || "";
+      if (!arztEmail) {
+        msg.textContent = `Für ${letterData.doctor} ist keine E-Mail-Adresse hinterlegt. Bitte beim Anlegen/Bearbeiten eines Rezepts für diesen Arzt ergänzen.`;
+        return;
+      }
+      // openLetterPreview() (window.open) muss synchron im Klick-Handler
+      // aufgerufen werden (siehe Kommentar bei createNachbestellLetterBtn) -
+      // der Nachbestellzettel dient hier als Vorlage zum Speichern/Drucken
+      // als PDF, das der Therapeut der geöffneten E-Mail manuell anhängt
+      // (mailto kann aus Sicherheitsgründen keine Anhänge setzen).
+      openLetterPreview(letterData.title, bodyHtml);
+      saveNachbestellHistorySnapshot({
+        title: `Nachbestellung ${letterData.doctor} · ${formatIsoDateShort(letterData.createdAt)}`,
+        doctor: letterData.doctor,
+        createdAt: letterData.createdAt,
+        rezeptCount: letterData.rezeptCount,
+        patientCount: letterData.patientCount,
+        snapshotHtml: bodyHtml,
+        lines
+      });
+      window.location.href = buildNachbestellMailtoLink({ letterData, lines, arztEmail, therapistName, therapistEmail });
+      queuePersistRuntimeData().then(() => {
+        showToast("Nachbestellzettel geöffnet - bitte als PDF speichern und in der E-Mail anhängen", 4000);
+        showNachbestellungView({
+          onLock,
+          doctorFilter: "",
+          textFilter: "",
+          selectedIds: []
+        });
+      });
+    } catch (err) {
+      console.error(err);
+      msg.textContent = err?.message || "Nachbestellzettel konnte nicht per E-Mail versendet werden.";
     }
   };
 
@@ -7638,7 +7213,17 @@ function escapeHtml(value) {
 // ZEITERFASSUNG – Phase 2
 // ─────────────────────────────────────────────
 
-function buildAbwesenheitMailtoLink({ email, therapistName, type, from, to }) {
+// Gemeinsamer mailto-Baustein für alle E-Mail-Versand-Stellen der App
+// (Abwesenheit, Freikuvert, Nachbestellung) - cc wird nur angehängt, wenn
+// eine Therapeuten-E-Mail in den Einstellungen hinterlegt ist, damit der
+// Therapeut selbst eine Kopie der versendeten Mails erhält.
+function buildMailtoLink({ to, subject, body, cc = "" }) {
+  const params = [`subject=${encodeURIComponent(subject)}`, `body=${encodeURIComponent(body)}`];
+  if (cc) params.push(`cc=${encodeURIComponent(cc)}`);
+  return `mailto:${encodeURIComponent(to || "")}?${params.join("&")}`;
+}
+
+function buildAbwesenheitMailtoLink({ email, therapistName, therapistEmail, type, from, to }) {
   const artLabel = type === "krank" ? "Krank" : "Urlaub";
   const subject = `Abwesenheitsmeldung – ${therapistName || "FaSt"}`;
   const body = [
@@ -7653,7 +7238,7 @@ function buildAbwesenheitMailtoLink({ email, therapistName, type, from, to }) {
     "Mit freundlichen Grüßen",
     therapistName || "—"
   ].join("\n");
-  return `mailto:${email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  return buildMailtoLink({ to: email, subject, body, cc: therapistEmail });
 }
 
 export function showAbwesenheitView({ onLock }) {
@@ -7663,6 +7248,7 @@ export function showAbwesenheitView({ onLock }) {
   const runtimeData = getRuntimeData();
   const homes = sortHomesAlpha(runtimeData?.homes || []);
   const therapistName = runtimeData?.settings?.therapistName || "";
+  const therapistEmail = runtimeData?.settings?.therapistEmail || "";
   let confirmData = null;
 
   function renderForm() {
@@ -7796,7 +7382,7 @@ export function showAbwesenheitView({ onLock }) {
             ${homesWithEmail.map((home) => `
               <div class="compact-card" style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
                 <div>${escapeHtml(home.name || "Ohne Name")}</div>
-                <a class="mailtoAbwesenheitLink" style="width:auto;" href="${buildAbwesenheitMailtoLink({ email: home.verwaltungsEmail, therapistName, type, from, to })}"><button type="button" style="width:auto; margin:0;">E-Mail öffnen</button></a>
+                <a class="mailtoAbwesenheitLink" style="width:auto;" href="${buildAbwesenheitMailtoLink({ email: home.verwaltungsEmail, therapistName, therapistEmail, type, from, to })}"><button type="button" style="width:auto; margin:0;">E-Mail öffnen</button></a>
               </div>
             `).join("")}
           </div>
@@ -7818,13 +7404,32 @@ export function showAbwesenheitView({ onLock }) {
   renderForm();
 }
 
-function buildFreikuvertMailtoLink({ bueroEmail, arztName, arztAdresse, therapistName }) {
+function buildFreikuvertMailtoLink({ bueroEmail, arztName, arztAdresse, therapistName, therapistEmail }) {
   const subject = `Freikuvert-Bestellung – ${arztName}`;
   const body = [
     `Bitte Freikuverts senden an: ${arztName} ${arztAdresse || ""}`.trim(),
     `Bestellt von: ${therapistName || "—"}`
   ].join("\n");
-  return `mailto:${bueroEmail}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  return buildMailtoLink({ to: bueroEmail, subject, body, cc: therapistEmail });
+}
+
+// mailto kann keine Datei anhängen - der Nachbestellzettel wird deshalb vorher
+// als Druckvorschau geöffnet (dort kann der Therapeut z.B. "Als PDF speichern"
+// wählen), und die E-Mail listet die angefragten Verordnungen als Text auf,
+// mit dem Hinweis, den soeben geöffneten Zettel manuell anzuhängen.
+function buildNachbestellMailtoLink({ letterData, lines, arztEmail, therapistName, therapistEmail }) {
+  const subject = `Rezeptnachbestellung Physiotherapie – ${therapistName || "FaSt"}`;
+  const body = [
+    `Sehr geehrte(r) ${letterData.doctor || ""},`,
+    "",
+    "anbei die Anfrage zur Nachbestellung folgender Heilmittelverordnungen (bitte den soeben geöffneten/heruntergeladenen Nachbestellzettel als PDF anhängen):",
+    "",
+    ...lines.map((line) => `- ${line.patient}${line.geb ? ` (geb. ${line.geb})` : ""} – ${line.heim ? `${line.heim} – ` : ""}${line.text}`),
+    "",
+    `Vielen Dank,`,
+    therapistName || ""
+  ].join("\n");
+  return buildMailtoLink({ to: arztEmail, subject, body, cc: therapistEmail });
 }
 
 export function showFreikuvertView({ onLock }) {
@@ -7834,6 +7439,7 @@ export function showFreikuvertView({ onLock }) {
   const runtimeData = getRuntimeData();
   const aerzte = getArztRegistry(runtimeData);
   const therapistName = runtimeData?.settings?.therapistName || "";
+  const therapistEmail = runtimeData?.settings?.therapistEmail || "";
   const bueroEmail = runtimeData?.settings?.buero?.email || "";
 
   function renderForm(message = "") {
@@ -7933,7 +7539,7 @@ export function showFreikuvertView({ onLock }) {
       </div>
 
       <div class="card">
-        <a href="${buildFreikuvertMailtoLink({ bueroEmail, arztName, arztAdresse, therapistName })}"><button type="button">E-Mail ans Büro öffnen</button></a>
+        <a href="${buildFreikuvertMailtoLink({ bueroEmail, arztName, arztAdresse, therapistName, therapistEmail })}"><button type="button">E-Mail ans Büro öffnen</button></a>
       </div>
     `);
 
@@ -9342,6 +8948,8 @@ function runFastiNavigate(navigate) {
     showStundenkontoView({ onLock });
   } else if (navigate.view === "patientenliste") {
     showPatientenListeView({ onLock });
+  } else if (navigate.view === "doku-liste") {
+    showDokuPatientenListeView({ onLock });
   } else if (navigate.view === "patient-create") {
     showCreatePatientRezeptView({ onLock, homeId: navigate.homeId });
   } else if (navigate.view === "homes") {

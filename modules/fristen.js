@@ -1,4 +1,4 @@
-import { parseDeDate, parseComparableDate, formatDeDate } from "../core/date-utils.js";
+import { parseDeDate, parseComparableDate, formatDeDate, getComparableFromDate } from "../core/date-utils.js";
 
 function parseDEDateToDate(str) {
   const comparable = parseDeDate(str);
@@ -110,6 +110,32 @@ function buildFristResult({ mode, latestStart, detailsText, validUntilText, erst
     traffic: getTrafficLevel(daysRemaining),
     daysRemaining
   };
+}
+
+// Schätzt das Ende der Gültigkeit eines Rezepts als vergleichbares
+// YYYY-MM-DD (nicht formatierter Text wie validUntilText) - genutzt vom
+// FaSt-Startdatum-Filter in buildRezeptNotices() (modules/fasti.js), um
+// Alt-Rezepte zu erkennen, deren Gültigkeit schon vor dem Startdatum
+// endete ("...auch wenn das Ausstellungsdatum und Behandlungen vorher
+// waren, aber die Gültigkeitsfrist über das Startdatum hinausreicht").
+// Ohne dokumentierte erste Behandlung wird ersatzweise das
+// Ausstellungsdatum als Basis verwendet (wie bei den Fristen bg/blanko
+// ohnehin immer der Fall) - bei GKV normal/dringend ist das nur eine
+// Annäherung, aber genau die richtige für den Zweck: ein nie begonnenes,
+// uraltes Rezept soll als abgelaufener Alt-Fall gelten statt endlos als
+// "laufend" mitgezählt zu werden.
+export function getRezeptGueltigBisComparable(rezept) {
+  const ausstellDate = parseDEDateToDate(rezept?.ausstell || "");
+  if (!ausstellDate) return null;
+
+  if (rezept?.bg) return getComparableFromDate(addMonthsSafe(ausstellDate, 2));
+  if (isBlanko(rezept)) return getComparableFromDate(addMonthsSafe(ausstellDate, 4));
+
+  const ersteBehandlung = getErsteBehandlungDatum(rezept);
+  const basis = ersteBehandlung || ausstellDate;
+  const total = totalAnwendungsmenge(rezept?.items || []);
+  const gueltigMonate = total <= 6 ? 3 : 6;
+  return getComparableFromDate(addMonthsSafe(basis, gueltigMonate));
 }
 
 export function getRezeptFristInfo(rezept) {

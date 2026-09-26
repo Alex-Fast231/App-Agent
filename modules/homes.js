@@ -861,19 +861,24 @@ export function getArztRegistry(data) {
 
   (data?.aerzte || []).forEach((arzt) => {
     const name = String(arzt?.name || "").trim();
-    if (name) registryByName.set(name, arzt.adresse || "");
+    if (name) registryByName.set(name, { adresse: arzt.adresse || "", email: arzt.email || "" });
   });
 
   namesFromRezepte.forEach((name) => {
-    if (!registryByName.has(name)) registryByName.set(name, "");
+    if (!registryByName.has(name)) registryByName.set(name, { adresse: "", email: "" });
   });
 
   return Array.from(registryByName.entries())
-    .map(([name, adresse]) => ({ name, adresse }))
+    .map(([name, { adresse, email }]) => ({ name, adresse, email }))
     .sort((a, b) => a.name.localeCompare(b.name, "de"));
 }
 
-export function upsertArztAdresse(name, adresse) {
+// email ist bewusst optional (dritter Parameter): wird er weggelassen
+// (undefined), bleibt eine bereits hinterlegte E-Mail-Adresse unangetastet -
+// die meisten Aufrufer (Rezept anlegen/bearbeiten) pflegen nur die Adresse,
+// nicht die E-Mail, und sollen eine dort separat gepflegte E-Mail nicht
+// versehentlich leeren.
+export function upsertArztAdresse(name, adresse, email) {
   const normalizedName = String(name || "").trim();
   if (!normalizedName) throw new Error("Arztname fehlt");
 
@@ -883,12 +888,14 @@ export function upsertArztAdresse(name, adresse) {
 
     if (existing) {
       existing.adresse = String(adresse || "").trim();
+      if (email !== undefined) existing.email = String(email || "").trim();
       existing.updatedAt = new Date().toISOString();
     } else {
       data.aerzte.push({
         id: generateId("arzt"),
         name: normalizedName,
         adresse: String(adresse || "").trim(),
+        email: email !== undefined ? String(email || "").trim() : "",
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       });

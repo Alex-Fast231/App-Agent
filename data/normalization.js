@@ -245,6 +245,25 @@ function normalizeBbs7Items(items) {
   return result;
 }
 
+const BBS_ITEM_KEYS = [
+  "sitzenZuStehen", "freiesStehen", "freiesSitzen", "stehenZuSitzen", "transfer",
+  "augenGeschlossen", "fuesseZusammen", "reichweite", "gegenstandAufheben", "umschauen",
+  "drehung360", "stufeWechsel", "tandemstand", "einbeinstand"
+];
+
+function normalizeBbs14Items(items) {
+  const source = items && typeof items === "object" ? items : {};
+  const result = {};
+  BBS_ITEM_KEYS.forEach((key) => {
+    const entry = source[key] && typeof source[key] === "object" ? source[key] : {};
+    result[key] = {
+      score: ensureNullableInt(entry.score, 0, 4),
+      nichtDurchfuehrbar: ensureBoolean(entry.nichtDurchfuehrbar, false)
+    };
+  });
+  return result;
+}
+
 function normalizeMrcGruppen(gruppen) {
   const source = gruppen && typeof gruppen === "object" ? gruppen : {};
   const result = {};
@@ -337,7 +356,9 @@ function normalizeAssessment(item) {
       nichtDurchfuehrbar: ensureBoolean(tugSource.nichtDurchfuehrbar, false)
     },
 
-    weiche: ensureEnum(source.weiche, ["neurologisch", "orthopaedisch", "schwerstbetroffen"], ""),
+    weiche: ensureEnum(source.weiche, ["neurologisch", "orthopaedisch", "schwerstbetroffen", "bbs"], ""),
+
+    bbs14: normalizeBbs14Items(source.bbs14),
 
     neuro: {
       bbs7: normalizeBbs7Items(bbs7Source),
@@ -591,6 +612,7 @@ function normalizeArzt(item) {
     id: ensureString(source.id) || generateId("arzt"),
     name: ensureString(source.name),
     adresse: ensureString(source.adresse),
+    email: ensureString(source.email),
     createdAt: ensureIsoString(source.createdAt, new Date().toISOString()),
     updatedAt: ensureIsoString(source.updatedAt, new Date().toISOString())
   };
@@ -642,6 +664,7 @@ export function finalizeAppStructure(data) {
     settings: {
       therapistId: ensureString(settings.therapistId) || generateId("therapist"),
       therapistName: ensureString(settings.therapistName),
+      therapistEmail: ensureString(settings.therapistEmail),
       therapistFax: ensureString(settings.therapistFax),
       practicePhone: ensureString(settings.practicePhone),
       practiceAddress: ensureString(settings.practiceAddress, PRACTICE_ADDRESS),

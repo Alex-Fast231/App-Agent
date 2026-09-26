@@ -23,6 +23,7 @@ export function createEmptyAppData() {
     settings: {
       therapistId: generateId("therapist"),
       therapistName: "",
+      therapistEmail: "",
       therapistFax: "",
       practicePhone: PRACTICE_PHONE,
       practiceAddress: PRACTICE_ADDRESS,

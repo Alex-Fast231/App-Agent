@@ -34,7 +34,7 @@ import {
   getPatientById,
   getRezeptById
 } from "./homes.js";
-import { getRezeptFristInfo } from "./fristen.js";
+import { getRezeptFristInfo, getRezeptGueltigBisComparable } from "./fristen.js";
 import { optimiereVerordnung, EMPFEHLUNG_ZU_ITEM_TYPE } from "./rezeptoptimierung.js";
 
 const PRIORITY_ORDER = { rot: 0, orange: 1, gelb: 2 };
@@ -110,6 +110,7 @@ function getWorkDayCodeFromComparable(comparableDate) {
 // ============================================================
 export function buildRezeptNotices(data) {
   const notices = [];
+  const fastStartComparable = getFastStartDatumComparable(data?.settings);
 
   (data?.homes || []).forEach((home) => {
     (home.patients || []).forEach((patient) => {
@@ -119,6 +120,21 @@ export function buildRezeptNotices(data) {
       if (patient.verstorben || patient.ausgeschieden) return;
 
       (patient.rezepte || []).forEach((rezept) => {
+        // Auf der Abgabeliste gespeicherte/gedruckte Rezepte gelten für FaSti
+        // als erledigt, egal ob der Therapeut sie zusätzlich noch manuell als
+        // "abgegeben" markiert - rezept.abgegeben wird bereits beim
+        // Speichern/Drucken einer Abgabeliste automatisch gesetzt.
+        if (rezept.abgegeben) return;
+
+        // FaSt-Startdatum: ein Alt-Rezept, dessen Gültigkeit schon vor dem
+        // Startdatum endete, wird ignoriert - auch wenn Ausstellungsdatum und
+        // Behandlungen davor lagen (Grund: alte, längst abgelaufene Rezepte
+        // erzeugten sonst Phantom-Meldungen).
+        if (fastStartComparable) {
+          const gueltigBis = getRezeptGueltigBisComparable(rezept);
+          if (gueltigBis && gueltigBis < fastStartComparable) return;
+        }
+
         const gesamt = totalAnwendungsmenge(rezept.items);
         const gezaehlt = countBehandlungstage(rezept);
         const verbleibend = gesamt - gezaehlt;
@@ -174,6 +190,50 @@ export function buildRezeptNotices(data) {
             action: null
           });
         }
+      });
+    });
+  });
+
+  return notices;
+}
+
+// Meldet Tage, an denen für einen Patienten bereits eine Behandlungszeit
+// gebucht wurde (Zeiterfassung, timeEntry.type === "behandlung"), aber noch
+// kein Doku-Eintrag (rezept.entries) für denselben Tag existiert - z.B. wenn
+// der Therapeut montags die Zeit erfasst, die Doku dazu aber vergisst. Der
+// aktuelle Tag wird bewusst ausgenommen, damit die Doku noch bis Tagesende
+// nachgetragen werden kann, ohne sofort eine Meldung auszulösen.
+function buildDokuFehltNotices(data) {
+  const notices = [];
+  const todayComparable = getComparableFromDate(new Date());
+
+  (data?.homes || []).forEach((home) => {
+    (home.patients || []).forEach((patient) => {
+      if (patient.verstorben || patient.ausgeschieden) return;
+
+      const patientName = fullPatientName(patient);
+      const heimName = home.name || "—";
+      const missingDates = new Set();
+
+      (patient.rezepte || []).forEach((rezept) => {
+        const dokuDates = new Set((rezept.entries || []).map((e) => e?.date).filter(Boolean));
+        (rezept.timeEntries || []).forEach((entry) => {
+          if (entry?.type !== "behandlung" || !entry?.date) return;
+          if (dokuDates.has(entry.date)) return;
+          const comparable = parseDeDate(entry.date);
+          if (!comparable || comparable >= todayComparable) return;
+          missingDates.add(entry.date);
+        });
+      });
+
+      missingDates.forEach((date) => {
+        notices.push({
+          id: `doku-fehlt-${patient.patientId}-${date}`,
+          bereich: "doku",
+          priority: "orange",
+          text: `${patientName} (${heimName}): Dokueintrag fehlt vom ${date}.`,
+          action: null
+        });
       });
     });
   });
@@ -447,7 +507,8 @@ export function buildFastiNotices(data) {
   const notices = [
     ...buildRezeptNotices(data),
     ...buildAssessmentNotices(data),
-    ...buildZuzahlungNotices(data)
+    ...buildZuzahlungNotices(data),
+    ...buildDokuFehltNotices(data)
   ];
 
   const montag = buildMontagsSummaryNotice(data);
@@ -948,6 +1009,11 @@ const FASTI_COMMANDS = {
     needsPatient: false,
     triggerWords: ["zeig alle patienten", "patientenliste", "zeig die patientenliste", "öffne patientenliste"]
   },
+  doku_liste_oeffnen: {
+    kind: "navigation",
+    needsPatient: false,
+    triggerWords: ["zeig doku", "öffne doku", "doku anzeigen", "zeig die doku", "dokuliste", "doku-liste"]
+  },
   abwesenheit_eintragen: {
     kind: "mutation",
     needsPatient: false,
@@ -1359,6 +1425,10 @@ function runFastiCommand(context, data) {
 
   if (context.commandId === "patientenliste_oeffnen") {
     return { reply: "Öffne die Patientenliste.", navigate: { view: "patientenliste" } };
+  }
+
+  if (context.commandId === "doku_liste_oeffnen") {
+    return { reply: "Öffne die Doku-Übersicht.", navigate: { view: "doku-liste" } };
   }
 
   if (context.commandId === "abwesenheit_eintragen") {
