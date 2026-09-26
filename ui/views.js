@@ -6795,17 +6795,29 @@ export function showNachbestellungView({ onLock, doctorFilter = "", textFilter =
         snapshotHtml: bodyHtml,
         lines
       });
+
       if (versandart === "email") {
-        // mailto kann aus Sicherheitsgründen keine Anhänge setzen - der
-        // gerade geöffnete Nachbestellzettel dient hier als Vorlage zum
-        // Speichern/Drucken als PDF, das der Therapeut der geöffneten E-Mail
-        // manuell anhängt.
-        window.location.href = buildNachbestellMailtoLink({ letterData, lines, arztEmail, therapistName, therapistEmail });
+        // Ein per JavaScript gesetztes window.location.href = "mailto:..."
+        // öffnet auf vielen Geräten (v.a. als installierte PWA auf Android)
+        // KEINEN Mail-Client, wenn direkt zuvor im selben Klick bereits ein
+        // window.open() (die Zettel-Vorschau) lief - der Browser lässt dann
+        // offenbar nur eine der beiden "privilegierten" Aktionen pro
+        // Nutzer-Geste durch. Ein echter <a href="mailto:...">-Link, den der
+        // Nutzer selbst anklickt, funktioniert zuverlässig (genau dieses
+        // Muster nutzen bereits "Urlaub/Krank" und "Freikuvert bestellen").
+        // Die Ansicht wird deshalb hier NICHT sofort zurückgesetzt, damit
+        // dieser Link sichtbar und klickbar bleibt.
+        const mailtoHref = buildNachbestellMailtoLink({ letterData, lines, arztEmail, therapistName, therapistEmail });
+        msg.className = "";
+        msg.innerHTML = `
+          <p>Nachbestellzettel geöffnet - bitte als PDF speichern, dann unten auf "E-Mail öffnen" klicken und die PDF-Datei anhängen.</p>
+          <a href="${mailtoHref}"><button type="button" id="openNachbestellMailtoBtn">E-Mail an ${escapeHtml(letterData.doctor)} öffnen</button></a>
+        `;
+        queuePersistRuntimeData();
+        return;
       }
+
       queuePersistRuntimeData().then(() => {
-        if (versandart === "email") {
-          showToast("Nachbestellzettel geöffnet - bitte als PDF speichern und in der E-Mail anhängen", 4000);
-        }
         showNachbestellungView({
           onLock,
           doctorFilter: "",
