@@ -73,6 +73,7 @@ import {
   createAbwesenheit,
   getArztRegistry,
   upsertArztAdresse,
+  renameArzt,
   saveFreikuvertBestellung,
   scheduleAssessment,
   saveAssessmentResult,
@@ -6495,11 +6496,11 @@ export function showArztDetailView({ onLock, doctorName, searchText = "" }) {
 
     <div class="card">
       <h3>Arztdaten</h3>
-      <div class="compact-meta">
-        Name: ${escapeHtml(arzt.name)}<br>
-        E-Mail: ${arzt.email ? escapeHtml(arzt.email) : "—"}<br>
-        Adresse: ${arzt.adresse ? escapeAndPreserveLineBreaks(arzt.adresse) : "—"}
-      </div>
+      <label for="arztDetailName">Name</label>
+      <input id="arztDetailName" type="text" value="${escapeHtml(arzt.name)}">
+      ${renderArztAdresseFields(arzt.adresse, arzt.email)}
+      <button id="saveArztDetailBtn" style="margin-top:12px;">Speichern</button>
+      <div id="arztDetailMsg"></div>
     </div>
 
     <div class="card">
@@ -6517,6 +6518,33 @@ export function showArztDetailView({ onLock, doctorName, searchText = "" }) {
   `);
 
   document.getElementById("backArztListeBtn").onclick = () => showArztuebersichtView({ onLock, searchText });
+
+  document.getElementById("saveArztDetailBtn").onclick = async () => {
+    const msg = document.getElementById("arztDetailMsg");
+    msg.className = "error";
+    msg.textContent = "";
+
+    const newName = document.getElementById("arztDetailName").value.trim();
+    if (!newName) {
+      msg.textContent = "Bitte einen Namen eingeben.";
+      return;
+    }
+    const newAdresse = collectArztAdresseFromForm();
+    const newEmail = collectArztEmailFromForm();
+
+    try {
+      if (newName !== arzt.name) {
+        renameArzt(arzt.name, newName);
+      }
+      upsertArztAdresse(newName, newAdresse, newEmail);
+      await queuePersistRuntimeData();
+      showToast("Arztdaten gespeichert");
+      showArztDetailView({ onLock, doctorName: newName, searchText });
+    } catch (err) {
+      console.error(err);
+      msg.textContent = err?.message || "Arztdaten konnten nicht gespeichert werden.";
+    }
+  };
 }
 
 export function showNachbestellungView({ onLock, doctorFilter = "", textFilter = "", selectedIds = [] }) {
