@@ -3106,6 +3106,7 @@ export function showDashboardView({ onLock, keepOverviewOpen = false } = {}) {
       </div>
       <div class="row" style="margin-top:12px;">
         <button id="openKilometerBtn" class="secondary" style="margin-top:0;">Kilometer</button>
+        <button id="openAerzteBtn" class="secondary" style="margin-top:0;">👨‍⚕️ Ärzte</button>
       </div>
       <div class="row" style="margin-top:12px;">
         <button id="openUnterschriftenblattBtn" class="secondary" style="margin-top:0;">Unterschriften</button>
@@ -3162,6 +3163,7 @@ export function showDashboardView({ onLock, keepOverviewOpen = false } = {}) {
   document.getElementById("openAbgabeBtn").onclick = () => showAbgabeView({ onLock });
   document.getElementById("openNachbestellBtn").onclick = () => showNachbestellungView({ onLock });
   document.getElementById("openKilometerBtn").onclick = () => showKilometerView({ onLock });
+  document.getElementById("openAerzteBtn").onclick = () => showArztuebersichtView({ onLock });
   document.getElementById("openUnterschriftenblattBtn").onclick = () => {
     window.open("./vorlagen/unterschriftenblatt.pdf", "_blank");
   };
@@ -6395,6 +6397,128 @@ export function showAbgabeView({ onLock, searchText = "", selectedIds = [] }) {
   });
 }
 
+// Patienten eines Arztes: alle (nicht verstorbenen) Patienten, die
+// mindestens ein Rezept mit exakt diesem Arztnamen haben - unabhängig davon,
+// ob das Rezept noch offen oder bereits abgegeben ist, damit die Übersicht
+// auch bei einem gerade abgegebenen/aufgebrauchten Rezept den Patienten noch
+// zeigt.
+function getPatientsForDoctor(data, doctorName) {
+  return collectAllPatients(data).filter(({ patient }) =>
+    (patient.rezepte || []).some((rezept) => String(rezept.arzt || "").trim() === doctorName)
+  );
+}
+
+export function showArztuebersichtView({ onLock, searchText = "" } = {}) {
+  bindLockButton(onLock);
+  setCurrentView("arzt-uebersicht", { searchText });
+
+  const runtimeData = getRuntimeData();
+  const q = String(searchText || "").trim().toLowerCase();
+  const doctors = getArztRegistry(runtimeData)
+    .map((arzt) => ({ ...arzt, patientCount: getPatientsForDoctor(runtimeData, arzt.name).length }))
+    .filter((arzt) => !q || arzt.name.toLowerCase().includes(q));
+
+  render(`
+    <div class="card">
+      <h2>Ärzte</h2>
+      <p class="muted">${doctors.length} Arzt/Ärzte, alphabetisch sortiert.</p>
+      <button id="backDashboardBtn" class="secondary">Zurück zum Dashboard</button>
+    </div>
+
+    <div class="card">
+      <label for="arztUebersichtSearch">Suche nach Arztname</label>
+      <input id="arztUebersichtSearch" type="text" value="${escapeHtml(searchText)}" placeholder="z.B. Dr. Müller">
+      <div class="row">
+        <button id="runArztUebersichtSearchBtn" class="secondary">Suchen</button>
+        <button id="clearArztUebersichtSearchBtn" class="secondary">Suche löschen</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="list-stack">
+        ${doctors.length === 0 ? `<p class="muted">Keine passenden Ärzte gefunden.</p>` : ""}
+        ${doctors.map((arzt) => `
+          <div class="openArztDetailBtn compact-card" style="cursor:pointer;" data-doctor-name="${escapeHtml(arzt.name)}">
+            <div style="font-weight:600;">${escapeHtml(arzt.name)}</div>
+            <div class="compact-meta">${arzt.patientCount} Patient(en)${arzt.email ? ` · ${escapeHtml(arzt.email)}` : ""}</div>
+          </div>
+        `).join("")}
+      </div>
+    </div>
+  `);
+
+  document.getElementById("backDashboardBtn").onclick = () => showDashboardView({ onLock });
+
+  const runSearch = () => {
+    showArztuebersichtView({ onLock, searchText: document.getElementById("arztUebersichtSearch").value });
+  };
+  document.getElementById("runArztUebersichtSearchBtn").onclick = runSearch;
+  document.getElementById("arztUebersichtSearch").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") runSearch();
+  });
+  document.getElementById("clearArztUebersichtSearchBtn").onclick = () => {
+    showArztuebersichtView({ onLock, searchText: "" });
+  };
+
+  document.querySelectorAll(".openArztDetailBtn").forEach((btn) => {
+    btn.onclick = () => {
+      showArztDetailView({ onLock, doctorName: btn.dataset.doctorName, searchText });
+    };
+  });
+}
+
+export function showArztDetailView({ onLock, doctorName, searchText = "" }) {
+  bindLockButton(onLock);
+  setCurrentView("arzt-detail", { doctorName, searchText });
+
+  const runtimeData = getRuntimeData();
+  const arzt = getArztRegistry(runtimeData).find((a) => a.name === doctorName);
+
+  if (!arzt) {
+    render(`
+      <div class="card">
+        <p class="error">Arzt nicht gefunden.</p>
+        <button id="backArztListeBtn" class="secondary">Zurück zur Arztübersicht</button>
+      </div>
+    `);
+    document.getElementById("backArztListeBtn").onclick = () => showArztuebersichtView({ onLock, searchText });
+    return;
+  }
+
+  const patients = getPatientsForDoctor(runtimeData, doctorName);
+
+  render(`
+    <div class="card">
+      <h2>${escapeHtml(arzt.name)}</h2>
+      <button id="backArztListeBtn" class="secondary">Zurück zur Arztübersicht</button>
+    </div>
+
+    <div class="card">
+      <h3>Arztdaten</h3>
+      <div class="compact-meta">
+        Name: ${escapeHtml(arzt.name)}<br>
+        E-Mail: ${arzt.email ? escapeHtml(arzt.email) : "—"}<br>
+        Adresse: ${arzt.adresse ? escapeAndPreserveLineBreaks(arzt.adresse) : "—"}
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Patienten (${patients.length})</h3>
+      <div class="list-stack">
+        ${patients.length === 0 ? `<p class="muted">Keine Patienten für diesen Arzt gefunden.</p>` : ""}
+        ${patients.map(({ patient, homeName }) => `
+          <div class="compact-card">
+            <div style="font-weight:600;">${escapeHtml(formatPatientName(patient) || "Ohne Namen")}</div>
+            <div class="compact-meta">${escapeHtml(homeName)}${patient.birthDate ? ` · geb. ${escapeHtml(patient.birthDate)}` : ""}</div>
+          </div>
+        `).join("")}
+      </div>
+    </div>
+  `);
+
+  document.getElementById("backArztListeBtn").onclick = () => showArztuebersichtView({ onLock, searchText });
+}
+
 export function showNachbestellungView({ onLock, doctorFilter = "", textFilter = "", selectedIds = [] }) {
   bindLockButton(onLock);
 
@@ -6500,7 +6624,6 @@ export function showNachbestellungView({ onLock, doctorFilter = "", textFilter =
       <div class="row" style="margin-top:12px;">
         <button id="createNachbestellLetterBtn">Nachbestellzettel erzeugen</button>
         <button id="printNachbestellSelectionBtn" class="secondary">Aktuelle Auswahl drucken</button>
-        <button id="mailNachbestellSelectionBtn" class="secondary">Per E-Mail an Arzt senden</button>
       </div>
 
       <div id="nachbestellMsg"></div>
@@ -6605,6 +6728,13 @@ export function showNachbestellungView({ onLock, doctorFilter = "", textFilter =
     });
   });
 
+  // Die Zustellart "email" (Auswahl oben bei "Zustellung") wird hier direkt
+  // mit ausgeführt statt über einen eigenen, zweiten Button - vorher gab es
+  // sowohl diese Auswahl als auch einen separaten "Per E-Mail an Arzt
+  // senden"-Button, die beide letztlich denselben Vorgang anstießen (Zettel
+  // öffnen + mailto), aber unabhängig voneinander bedient werden mussten und
+  // sich bei abweichender Auswahl sogar widersprechen konnten (Brieftext
+  // "per Fax", Versand aber trotzdem per Mail-Button).
   document.getElementById("createNachbestellLetterBtn").onclick = () => {
     const msg = document.getElementById("nachbestellMsg");
     msg.className = "error";
@@ -6612,6 +6742,17 @@ export function showNachbestellungView({ onLock, doctorFilter = "", textFilter =
 
     try {
       const { letterData, bodyHtml, lines } = buildCurrentLetter();
+      const versandart = getRadioValue("nachbestellVersandart") || "fax";
+
+      let arztEmail = "";
+      if (versandart === "email") {
+        arztEmail = getArztRegistry(getRuntimeData()).find((a) => a.name === letterData.doctor)?.email || "";
+        if (!arztEmail) {
+          msg.textContent = `Für ${letterData.doctor} ist keine E-Mail-Adresse hinterlegt. Bitte beim Anlegen/Bearbeiten eines Rezepts für diesen Arzt ergänzen.`;
+          return;
+        }
+      }
+
       // openLetterPreview() (window.open) muss synchron direkt im Klick-Handler
       // aufgerufen werden - ein await davor (z.B. für das Speichern) lässt den
       // Browser die Nutzeraktion "verlieren" und blockiert das Popup lautlos,
@@ -6626,7 +6767,17 @@ export function showNachbestellungView({ onLock, doctorFilter = "", textFilter =
         snapshotHtml: bodyHtml,
         lines
       });
+      if (versandart === "email") {
+        // mailto kann aus Sicherheitsgründen keine Anhänge setzen - der
+        // gerade geöffnete Nachbestellzettel dient hier als Vorlage zum
+        // Speichern/Drucken als PDF, das der Therapeut der geöffneten E-Mail
+        // manuell anhängt.
+        window.location.href = buildNachbestellMailtoLink({ letterData, lines, arztEmail, therapistName, therapistEmail });
+      }
       queuePersistRuntimeData().then(() => {
+        if (versandart === "email") {
+          showToast("Nachbestellzettel geöffnet - bitte als PDF speichern und in der E-Mail anhängen", 4000);
+        }
         showNachbestellungView({
           onLock,
           doctorFilter: "",
@@ -6646,49 +6797,6 @@ export function showNachbestellungView({ onLock, doctorFilter = "", textFilter =
       openHtmlDocument(letterData.title, bodyHtml, { autoPrint: true });
     } catch (err) {
       alert(err?.message || 'Nachbestellzettel konnte nicht gedruckt werden.');
-    }
-  };
-
-  document.getElementById("mailNachbestellSelectionBtn").onclick = () => {
-    const msg = document.getElementById("nachbestellMsg");
-    msg.className = "error";
-    msg.textContent = "";
-
-    try {
-      const { letterData, bodyHtml, lines } = buildCurrentLetter();
-      const arztEmail = getArztRegistry(getRuntimeData()).find((a) => a.name === letterData.doctor)?.email || "";
-      if (!arztEmail) {
-        msg.textContent = `Für ${letterData.doctor} ist keine E-Mail-Adresse hinterlegt. Bitte beim Anlegen/Bearbeiten eines Rezepts für diesen Arzt ergänzen.`;
-        return;
-      }
-      // openLetterPreview() (window.open) muss synchron im Klick-Handler
-      // aufgerufen werden (siehe Kommentar bei createNachbestellLetterBtn) -
-      // der Nachbestellzettel dient hier als Vorlage zum Speichern/Drucken
-      // als PDF, das der Therapeut der geöffneten E-Mail manuell anhängt
-      // (mailto kann aus Sicherheitsgründen keine Anhänge setzen).
-      openLetterPreview(letterData.title, bodyHtml);
-      saveNachbestellHistorySnapshot({
-        title: `Nachbestellung ${letterData.doctor} · ${formatIsoDateShort(letterData.createdAt)}`,
-        doctor: letterData.doctor,
-        createdAt: letterData.createdAt,
-        rezeptCount: letterData.rezeptCount,
-        patientCount: letterData.patientCount,
-        snapshotHtml: bodyHtml,
-        lines
-      });
-      window.location.href = buildNachbestellMailtoLink({ letterData, lines, arztEmail, therapistName, therapistEmail });
-      queuePersistRuntimeData().then(() => {
-        showToast("Nachbestellzettel geöffnet - bitte als PDF speichern und in der E-Mail anhängen", 4000);
-        showNachbestellungView({
-          onLock,
-          doctorFilter: "",
-          textFilter: "",
-          selectedIds: []
-        });
-      });
-    } catch (err) {
-      console.error(err);
-      msg.textContent = err?.message || "Nachbestellzettel konnte nicht per E-Mail versendet werden.";
     }
   };
 
