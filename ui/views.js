@@ -6640,8 +6640,22 @@ export function showNachbestellungView({ onLock, doctorFilter = "", textFilter =
         ${renderRadioGroup("nachbestellVersandart", [
           { val: "fax", label: "Per Fax an mich / Original zur Einrichtung" },
           { val: "abholen", label: "Ich hole die Rezepte selbst ab" },
-          { val: "post", label: "Original per Post an die Praxis" },
-          { val: "email", label: "Per E-Mail an den Arzt senden" }
+          { val: "post", label: "Original per Post an die Praxis" }
+          // TODO(E-Mail-Zustellung an den Arzt): auf Nutzerwunsch komplett aus
+          // der Auswahl ausgeblendet (26.09.2026) - der mailto-Link öffnet auf
+          // dem Gerät des Nutzers immer den dort als Standard hinterlegten
+          // privaten E-Mail-Anbieter (z.B. GMX/Web.de), NICHT das
+          // geschäftliche Strato-Postfach, das eigentlich genutzt werden
+          // soll. mailto: kann den Absender-Account technisch nicht
+          // vorgeben - das müsste über einen anderen Weg gelöst werden (z.B.
+          // ein direkter Compose-Link zur Strato-Webmail-Oberfläche, siehe
+          // dazu bereits eine frühere reine Rückfrage des Nutzers dazu).
+          // Der gesamte Code für diesen Weg (versandTextByArt.email,
+          // buildNachbestellMailtoLink(), der email-Zweig in
+          // createNachbestellLetterBtn) bleibt bewusst unverändert bestehen
+          // und ist einsatzbereit, sobald diese Option hier wieder ergänzt
+          // wird - NICHT einfach den Eintrag unten wieder eintragen, ohne
+          // vorher das eigentliche Strato-Problem gelöst zu haben.
         ], "fax")}
         <div id="nachbestellAbholDatumWrap" style="display:none; margin-top:8px;">
           <label for="nachbestellAbholDatum">Abholdatum</label>
