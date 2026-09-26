@@ -232,7 +232,7 @@ function buildDokuFehltNotices(data) {
           bereich: "doku",
           priority: "orange",
           text: `${patientName} (${heimName}): Dokueintrag fehlt vom ${date}.`,
-          action: null
+          action: { type: "doku_nachtragen", homeId: home.homeId, patientId: patient.patientId, patientName, date }
         });
       });
     });

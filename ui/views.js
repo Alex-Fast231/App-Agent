@@ -1603,6 +1603,7 @@ function bindRezeptPruefungLive(panelId) {
 function render(html) {
   app.innerHTML = html;
   bindDateAutoFormatsIn(app);
+  syncHardwareBackGuardForCurrentView();
 }
 
 // Android-Hardware-/Geste-Zurück-Taste: soll die App nie schließen, sondern
@@ -1678,12 +1679,48 @@ function pushHardwareBackGuard() {
   }
 }
 
+// Schiebt nur dann eine neue Sperre nach, wenn ganz oben im Verlauf nicht
+// ohnehin schon eine liegt (history.state verrät das direkt) - idempotent,
+// darf also beliebig oft aufgerufen werden, ohne den Verlauf unnötig
+// wachsen zu lassen.
+function ensureHardwareBackGuardArmed() {
+  if (history.state && history.state.appBackGuard === true) return;
+  pushHardwareBackGuard();
+}
+
+// Hält die Zurück-Sperre synchron zur aktuell sichtbaren Ansicht - wird aus
+// render() heraus bei JEDER Bildschirmänderung aufgerufen, unabhängig davon,
+// ob sie durch einen normalen Klick oder durch die Zurück-Taste selbst
+// ausgelöst wurde. Das ist entscheidend: ohne diesen Aufruf aus render()
+// "vergaß" die App die Sperre dauerhaft, sobald einmal auf dem Dashboard
+// zurückgedrückt wurde, selbst wenn der Nutzer danach über normale Klicks
+// wieder tief in die App navigierte (per Playwright gefundener, echter
+// Folgefehler der ersten Fassung) - die Sperre wurde dort nur im
+// popstate-Handler verwaltet, der bei normaler Navigation nie feuert.
+function syncHardwareBackGuardForCurrentView() {
+  // Auf dem Dashboard (und nur dort) soll der Zurück-Druck die App
+  // tatsächlich verlassen können - Standard-Android-Verhalten: Zurück auf
+  // dem "Zuhause"-Bildschirm einer App beendet sie. Die Sperre wird deshalb
+  // hier bewusst NICHT nachgeschoben, solange kein Overlay (z.B. Backup-
+  // Erinnerung) offen ist - das hat weiterhin Vorrang und wird zuerst
+  // geschlossen, statt die App direkt zu verlassen.
+  const overlay = document.querySelector('[id$="Overlay"]');
+  if (getCurrentView() === "dashboard" && !overlay) return;
+  ensureHardwareBackGuardArmed();
+}
+
 function initHardwareBackButtonHandling() {
   pushHardwareBackGuard();
   window.addEventListener("popstate", () => {
-    pushHardwareBackGuard();
     const target = findHardwareBackTarget();
     if (target) target.click();
+    // target.click() löst normalerweise render() aus, das die Sperre über
+    // syncHardwareBackGuardForCurrentView() bereits selbst nachzieht - der
+    // Aufruf hier fängt zusätzlich die Fälle ab, in denen das NICHT
+    // passiert: ein per Klick geschlossenes Overlay (nur overlay.remove(),
+    // kein render()) oder gar kein gefundenes Ziel (z.B. PIN-Login-
+    // Bildschirm, wo ein zweiter Druck nicht aus der App führen soll).
+    syncHardwareBackGuardForCurrentView();
   });
 }
 
@@ -2738,7 +2775,6 @@ export function showSettingsView({ onLock }) {
 
       <label for="settingsTherapistEmail">Therapeuten-E-Mail</label>
       <input id="settingsTherapistEmail" type="email" autocomplete="off" value="${escapeHtml(settings.therapistEmail || "")}" placeholder="name@praxis.de">
-      <p class="muted">Wird als Absender-Hinweis/CC bei E-Mails aus der App verwendet (Urlaub/Krank, Freikuvert, Nachbestellung) - die App öffnet dafür einen vorausgefüllten Entwurf im installierten E-Mail-Programm.</p>
 
       <label>Praxisadresse</label>
       <p class="muted" style="white-space:pre-line; border:1px solid var(--border); border-radius:10px; padding:10px 12px; margin-top:4px;">${escapeHtml(PRACTICE_ADDRESS)}</p>
@@ -3574,12 +3610,12 @@ export function showPatientenListeView({ onLock, searchText = "" } = {}) {
 // (showHomeDetailView) als auch vom neuen Dashboard-Button "Doku"
 // (showDokuSchreibenView) - beide Wege müssen laut Vorgabe exakt dieselbe
 // Funktion bieten, nur der Einstiegsweg unterscheidet sich.
-function renderQuickDocFields(patient) {
+function renderQuickDocFields(patient, prefillDate = "") {
   const quickDocRezepte = sortRezepteForDisplay(patient.rezepte || []).filter((rezept) => rezept.abgegeben !== true);
   return `
     <div class="compact-card" style="margin-bottom:10px;">
       <label for="quickDocDate-${patient.patientId}">Behandlungsdatum</label>
-      <input id="quickDocDate-${patient.patientId}" class="quickDocDateInput" type="text" value="${escapeHtml(formatCurrentDateShort())}" placeholder="TT.MM.JJJJ" inputmode="numeric">
+      <input id="quickDocDate-${patient.patientId}" class="quickDocDateInput" type="text" value="${escapeHtml(prefillDate || formatCurrentDateShort())}" placeholder="TT.MM.JJJJ" inputmode="numeric">
     </div>
     ${quickDocRezepte.length === 0 ? `<p class="muted">Keine Rezepte für SchnellDoku vorhanden.</p>` : quickDocRezepte.length === 1 ? `
       <div class="compact-card" style="margin-bottom:10px;">
@@ -3709,10 +3745,10 @@ export function showDokuPatientenListeView({ onLock, searchText = "" } = {}) {
       <div class="list-stack">
         ${allPatients.length === 0 ? `<p class="muted">Keine passenden Patienten gefunden.</p>` : ""}
         ${allPatients.map(({ patient, homeId, homeName }) => `
-          <button class="openDokuSchreibenBtn compact-card" style="text-align:left; width:100%; border:none; cursor:pointer;" data-home-id="${escapeHtml(homeId)}" data-patient-id="${escapeHtml(patient.patientId)}">
+          <div class="openDokuSchreibenBtn compact-card" style="cursor:pointer;" data-home-id="${escapeHtml(homeId)}" data-patient-id="${escapeHtml(patient.patientId)}">
             <div style="font-weight:600;">${escapeHtml(formatPatientName(patient) || "Ohne Namen")}</div>
             <div class="compact-meta">${escapeHtml(homeName)}${patient.birthDate ? ` · geb. ${escapeHtml(patient.birthDate)}` : ""}</div>
-          </button>
+          </div>
         `).join("")}
       </div>
     </div>
@@ -3742,7 +3778,7 @@ export function showDokuPatientenListeView({ onLock, searchText = "" } = {}) {
 // Umweg - siehe showDokuPatientenListeView() oben. Nutzt dieselben
 // renderQuickDocFields()/bindQuickDocHandlers()-Bausteine wie die
 // SchnellDoku in showHomeDetailView.
-export function showDokuSchreibenView({ onLock, homeId, patientId, searchText = "" }) {
+export function showDokuSchreibenView({ onLock, homeId, patientId, searchText = "", prefillDate = "" }) {
   bindLockButton(onLock);
   setCurrentView("doku-schreiben", { homeId, patientId, searchText });
 
@@ -3769,7 +3805,7 @@ export function showDokuSchreibenView({ onLock, homeId, patientId, searchText = 
     </div>
 
     <div class="card">
-      ${renderQuickDocFields(patient)}
+      ${renderQuickDocFields(patient, prefillDate)}
     </div>
   `);
 
@@ -8637,7 +8673,20 @@ function ensureFastiStyles() {
     }
     .fasti-panel{
       position:fixed; right:16px; bottom:calc(84px + env(safe-area-inset-bottom, 0px));
-      width:360px; max-width:calc(100vw - 32px); max-height:min(72vh, 640px);
+      width:360px; max-width:calc(100vw - 32px);
+      /* vh bemisst sich auf vielen mobilen Browsern (v.a. Android Chrome) am
+         GRÖSSTEN möglichen Viewport (Adressleiste ausgeblendet), nicht am
+         gerade sichtbaren - dadurch konnte der obere Rand des (von unten
+         verankerten) Panels über den sichtbaren Bildschirm hinausragen und
+         wurde abgeschnitten, sobald die Adressleiste eingeblendet war. dvh
+         (dynamic viewport height) verfolgt den tatsächlich sichtbaren
+         Viewport live mit - die vh-Zeile bleibt als Fallback für ältere
+         Browser ohne dvh-Unterstützung stehen, die zweite (dvh) gewinnt
+         überall dort, wo sie unterstützt wird. calc(100dvh - 120px) sorgt
+         zusätzlich dafür, dass oben immer mindestens etwas Rand bleibt.
+      */
+      max-height:min(72vh, 640px);
+      max-height:min(72dvh, 640px, calc(100dvh - 120px));
       background:#fff; border-radius:16px; border:1px solid #dbe3ee;
       box-shadow:0 14px 44px rgba(15,23,42,0.32); z-index:9991;
       display:flex; flex-direction:column; overflow:hidden;
@@ -8737,6 +8786,7 @@ function fastiActionLabel(action) {
   if (action?.type === "doku_eintrag_anlegen") return "Eintragen";
   if (action?.type === "abwesenheit_anlegen") return "Eintragen";
   if (action?.type === "patient_ausgeschieden_setzen") return action.value ? "Als ausgeschieden markieren" : "Wieder aktivieren";
+  if (action?.type === "doku_nachtragen") return "Dokumentieren";
   return "Bestätigen";
 }
 
@@ -8783,6 +8833,19 @@ function bindFastiNoticeButtons() {
           result = { reply: `Da ist etwas schiefgelaufen: ${err?.message || err}` };
         }
         handleFastiResult(result);
+        return;
+      }
+      if (notice.action.type === "doku_nachtragen") {
+        // Reine Navigation statt Mutation - läuft deshalb nicht über
+        // runFastiAction()/executeFastiAction(), sondern öffnet direkt die
+        // Doku-Schreiben-Ansicht mit dem fehlenden Datum vorausgefüllt.
+        setFastiPanelOpen(false);
+        showDokuSchreibenView({
+          onLock: fastiOnLock,
+          homeId: notice.action.homeId,
+          patientId: notice.action.patientId,
+          prefillDate: notice.action.date
+        });
         return;
       }
       runFastiAction(notice.action);
@@ -9210,6 +9273,20 @@ function makeFastiNoticesResizable() {
   resizer.addEventListener("pointercancel", endResize);
 }
 
+// Liefert dieselbe Höhenformel wie ".fasti-panel{ max-height: ... }" in
+// ensureFastiStyles() - dvh (dynamic viewport height) statt vh, damit der
+// obere Rand des von unten verankerten Panels nicht über den tatsächlich
+// sichtbaren Bildschirm hinausragt, sobald die mobile Adressleiste
+// eingeblendet ist (vh bemisst sich auf vielen mobilen Browsern am GRÖSSTEN
+// möglichen Viewport, nicht am gerade sichtbaren). Ein per .style gesetzter
+// Wert kennt anders als eine CSS-Datei keine "zweite Zeile als Fallback" -
+// deshalb hier eine echte Feature-Prüfung statt nur der Hoffnung, dass der
+// Browser eine unbekannte Einheit stillschweigend ignoriert.
+function fastiPanelExpandedHeight() {
+  const supportsDvh = typeof CSS !== "undefined" && CSS.supports && CSS.supports("height", "1dvh");
+  return supportsDvh ? "min(72dvh, 640px, calc(100dvh - 120px))" : "min(72vh, 640px)";
+}
+
 // Blendet Meldungsliste, Resize-Griff und "Alle Meldungen aus"-Button
 // gemeinsam ein/aus - die drei gehören immer zusammen (kein Sinn, den
 // Resize-Griff zu zeigen, wenn es nichts zum Anzeigen gibt).
@@ -9228,7 +9305,7 @@ function setFastiNoticesVisible(visible) {
   // Meldungsliste per Drag-Griff verkleinert wird - das Panel würde dann nur
   // insgesamt kürzer, statt dass der Chat-Teil größer wird (siehe
   // makeFastiNoticesResizable()).
-  if (panel) panel.style.height = visible ? "min(72vh, 640px)" : "";
+  if (panel) panel.style.height = visible ? fastiPanelExpandedHeight() : "";
 }
 
 // Verwirft auf einen Schlag alle aktuell angezeigten Hinweise (Button im

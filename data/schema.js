@@ -1,7 +1,12 @@
 import { generateId } from "../core/utils.js";
 
 export const APP_SCHEMA_VERSION = 3;
-export const APP_VERSION = "3.9.46";
+// Bei jeder inhaltlichen Änderung an der App (jede neue Session/jedes
+// Update) muss diese Zahl von Hand erhöht werden - es gibt keinen
+// automatischen Build-Schritt dafür, und die Versionsanzeige im Dashboard
+// ist für den Therapeuten die einzige sichtbare Bestätigung, dass ein
+// Update tatsächlich angekommen ist.
+export const APP_VERSION = "3.10.0";
 export const APP_MODULE = "doku";
 
 export const PRACTICE_ADDRESS = `Physio Strobl
