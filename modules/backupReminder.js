@@ -1,23 +1,31 @@
 import { finalizeAppStructure } from "../data/normalization.js";
 import { mutateRuntimeData, queuePersistRuntimeData } from "../core/app-core.js";
 
-// Regelmäßige Erinnerung an das Viewer-Backup. Vorher (bis inkl. Session 7)
-// wurde die Backup-ZIP automatisch im Hintergrund per EmailJS verschickt -
-// das ließ sich aus der Entwicklungsumgebung heraus nie gegen den echten
-// EmailJS-Dienst verifizieren und blieb bei echten Fehlschlägen für den
-// Therapeuten unsichtbar. Auf Nutzerwunsch komplett entfernt: EmailJS wird
-// nirgends mehr in der App verwendet. Stattdessen zeigt die App beim
-// Öffnen eine Erinnerung an, die der Therapeut per Klick selbst erledigt
-// (Backup herunterladen und/oder E-Mail-Programm mit vorbereitetem
-// Anhangs-Hinweis öffnen) - dadurch gibt es keinen unsichtbaren
-// Fehlschlagpfad mehr, der Therapeut sieht direkt, ob das Backup
-// tatsächlich erstellt wurde.
+// Regelmäßige Sicherung/Erinnerung rund um das Viewer-Backup. Vorher (bis
+// inkl. Session 7) wurde die Backup-ZIP automatisch im Hintergrund per
+// EmailJS verschickt - das ließ sich aus der Entwicklungsumgebung heraus nie
+// gegen den echten EmailJS-Dienst verifizieren und blieb bei echten
+// Fehlschlägen für den Therapeuten unsichtbar. EmailJS wird nirgends mehr in
+// der App verwendet.
 //
-// TEMPORÄR AUF NUTZERWUNSCH ZUM TESTEN AUF 0 GESETZT (Erinnerung erscheint
-// bei JEDEM App-Öffnen) - die eigentliche Vorgabe ist alle 14 Tage. Vor dem
-// produktiven Einsatz wieder auf 14 zurücksetzen! Die Kalendertag-Zählung in
-// isBackupReminderDue() funktioniert unverändert für jeden Intervallwert.
-const BACKUP_REMINDER_INTERVAL_DAYS = 0;
+// Seit dem Stabilitäts-Audit (Meldung "App stürzt ab und verliert Daten",
+// Ursache: fehlender dauerhafter Speicherschutz) gibt es zwei UNABHÄNGIGE
+// Rhythmen mit jeweils eigenem Zeitstempel:
+// 1. Automatischer, stiller Download (kein Klick nötig), primär
+//    ÄNDERUNGSBASIERT - sobald seit dem letzten Auto-Download neue,
+//    ungesicherte Daten erkannt werden (siehe isAutoBackupDownloadDue()
+//    unten) - mit BACKUP_AUTO_DOWNLOAD_INTERVAL_DAYS Tagen als zusätzliche
+//    Sicherheitsuntergrenze. Landet im normalen Downloads-Ordner des
+//    Geräts, also AUSSERHALB des von Browser-Eviction betroffenen
+//    App-Speichers. Vorgabe des Nutzers: Betriebshandys, viele angesammelte
+//    ZIP-Dateien sind unkritisch.
+// 2. Die bisherige, klickbasierte Erinnerung ("Backup-Erinnerung"-Overlay,
+//    siehe showBackupReminderModal() in ui/views.js) bleibt zusätzlich
+//    bestehen, aber jetzt als reine "Bitte an die Praxis/den Viewer-PC
+//    senden"-Erinnerung, damit der separate Offline-Viewer regelmäßig auf
+//    den aktuellen Stand gebracht wird - Vorgabe des Nutzers: wöchentlich.
+const BACKUP_AUTO_DOWNLOAD_INTERVAL_DAYS = 5;
+const BACKUP_REMINDER_INTERVAL_DAYS = 7;
 
 // Fallback-Zieladresse für den mailto-Link, falls in den Einstellungen noch
 // keine Büro-Mail hinterlegt ist. Der Therapeut kann die Zieladresse im
@@ -49,6 +57,45 @@ export function isBackupReminderDue(data) {
   if (Number.isNaN(lastDate.getTime())) return true;
 
   return daysBetweenLocalDates(lastDate, new Date()) >= BACKUP_REMINDER_INTERVAL_DAYS;
+}
+
+// Eigener, unabhängiger Zeitstempel (lastAutoBackupDownloadAt) für den
+// stillen automatischen Download - bewusst getrennt von lastAutoExportAt
+// (das weiterhin nur die wöchentliche "Bitte senden"-Erinnerung steuert),
+// damit beide Rhythmen sich nicht gegenseitig zurücksetzen.
+//
+// Zwei Auslöser, das erste hat Vorrang:
+// 1. Änderungsbasiert (PRIMÄR): existieren seit dem letzten Auto-Download
+//    bereits neue, noch nicht gesicherte Daten (data.ui.lastDataChangeAt,
+//    zentral in mutateRuntimeData() gepflegt), wird SOFORT gesichert -
+//    unabhängig vom Kalenderrhythmus. Nutzerszenario: eine Kraft trägt nur
+//    einmal wöchentlich alles auf einmal ein - ein reiner Fünf-Tage-Rhythmus
+//    würde genau diesen Fall verpassen, wenn der Datenverlust kurz NACH der
+//    Eintragung eintritt, aber VOR dem nächsten Kalendertermin. Da diese
+//    Prüfung bei JEDEM Entsperren läuft (nicht nur beim kalten App-Start),
+//    greift sie auch bei einer durch Auto-Lock unterbrochenen, mehrstündigen
+//    Eintragungs-Sitzung mehrfach.
+// 2. Kalenderbasiert (Sicherheitsuntergrenze): mindestens alle
+//    BACKUP_AUTO_DOWNLOAD_INTERVAL_DAYS Tage, auch wenn aus irgendeinem
+//    Grund kein lastDataChangeAt vorliegt oder nichts geändert wurde.
+export function isAutoBackupDownloadDue(data) {
+  const lastDownloadAt = data?.ui?.lastAutoBackupDownloadAt;
+  const lastChangeAt = data?.ui?.lastDataChangeAt;
+
+  if (lastChangeAt) {
+    const changeDate = new Date(lastChangeAt);
+    if (!Number.isNaN(changeDate.getTime())) {
+      if (!lastDownloadAt) return true;
+      const downloadDate = new Date(lastDownloadAt);
+      if (Number.isNaN(downloadDate.getTime()) || changeDate > downloadDate) return true;
+    }
+  }
+
+  if (!lastDownloadAt) return true;
+  const lastDate = new Date(lastDownloadAt);
+  if (Number.isNaN(lastDate.getTime())) return true;
+
+  return daysBetweenLocalDates(lastDate, new Date()) >= BACKUP_AUTO_DOWNLOAD_INTERVAL_DAYS;
 }
 
 function requireZip() {
@@ -110,12 +157,11 @@ export async function buildBackupZip(runtimeData) {
 // bueroEmail kommt aus den Einstellungen (Büro-Mail) - ist dort nichts
 // hinterlegt, wird auf die bisherige feste Zieladresse zurückgefallen, damit
 // bestehende Praxen ohne gepflegte Büro-Mail nicht ohne Empfänger dastehen.
-export function buildBackupReminderMailtoLink({ filename, therapistName, therapistEmail = "", bueroEmail = "" }) {
+export function buildBackupReminderMailtoLink({ filename, therapistName, bueroEmail = "" }) {
   const subject = `Backup ${therapistName || "Therapeut"}`;
   const body = `Bitte die soeben heruntergeladene Datei "${filename}" manuell anhängen.`;
   const to = bueroEmail || BACKUP_REMINDER_TARGET_EMAIL;
   const params = [`subject=${encodeURIComponent(subject)}`, `body=${encodeURIComponent(body)}`];
-  if (therapistEmail) params.push(`cc=${encodeURIComponent(therapistEmail)}`);
   return `mailto:${encodeURIComponent(to)}?${params.join("&")}`;
 }
 
@@ -138,7 +184,7 @@ export async function markBackupReminderHandled(message) {
   mutateRuntimeData((data) => {
     data.ui.lastAutoExportAt = new Date().toISOString();
     pushBackupReminderHistory(data, "handled", message);
-  });
+  }, { silent: true });
   await queuePersistRuntimeData();
 }
 
@@ -149,6 +195,24 @@ export async function markBackupReminderHandled(message) {
 export async function markBackupReminderPostponed() {
   mutateRuntimeData((data) => {
     pushBackupReminderHistory(data, "postponed", "Erinnerung verschoben - erscheint beim nächsten Öffnen der App erneut.");
-  });
+  }, { silent: true });
+  await queuePersistRuntimeData();
+}
+
+// Wird nach jedem erfolgreichen stillen Auto-Download aufgerufen - eigener
+// Zeitstempel (siehe isAutoBackupDownloadDue()), damit dieser Rhythmus
+// unabhängig von der wöchentlichen "Bitte senden"-Erinnerung läuft.
+export async function markAutoBackupDownloadHandled(message) {
+  // silent: true ist hier zwingend nötig, nicht nur Kosmetik - ohne diese
+  // Option würde dieser Aufruf selbst den zentralen Änderungszeitstempel
+  // (lastDataChangeAt) mit hochziehen und sich dadurch beim allernächsten
+  // Login sofort wieder selbst als "neue ungesicherte Daten vorhanden"
+  // melden (siehe isAutoBackupDownloadDue()) - der automatische Download
+  // würde dann bei JEDEM Login erneut auslösen, egal ob wirklich etwas
+  // Neues dazukam.
+  mutateRuntimeData((data) => {
+    data.ui.lastAutoBackupDownloadAt = new Date().toISOString();
+    pushBackupReminderHistory(data, "auto-download", message);
+  }, { silent: true });
   await queuePersistRuntimeData();
 }

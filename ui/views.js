@@ -98,7 +98,8 @@ import {
   buildBackupZip,
   buildBackupReminderMailtoLink,
   markBackupReminderHandled,
-  markBackupReminderPostponed
+  markBackupReminderPostponed,
+  markAutoBackupDownloadHandled
 } from "../modules/backupReminder.js";
 import { answerFastiChat, executeFastiAction, resumeFastiChoice, startNachbestellungVorschlag, buildFastiNotices } from "../modules/fasti.js";
 import { generateId, formatPatientName } from "../core/utils.js";
@@ -1689,6 +1690,54 @@ function ensureHardwareBackGuardArmed() {
   pushHardwareBackGuard();
 }
 
+// Wird gesetzt, kurz bevor disarmHardwareBackGuardForDashboard() selbst ein
+// history.back() auslöst, damit der darauf folgende, rein programmatisch
+// erzeugte popstate NICHT wie ein echter Tastendruck behandelt wird (sonst
+// würde er fälschlich versuchen, einen Zurück-Button auf dem Dashboard zu
+// suchen/klicken).
+let hardwareBackGuardSelfTriggeredPop = false;
+
+// Löst sich auf, sobald ein per disarmHardwareBackGuardForDashboard()
+// ausgelöster history.back() tatsächlich abgeschlossen ist (popstate kommt
+// immer asynchron). Ohne diese Synchronisierung entsteht ein Wettlauf: die
+// automatische Backup-Erinnerung (maybeShowBackupReminder() in core/boot.js)
+// öffnet ihr Overlay UNMITTELBAR NACH showDashboardView() - also potenziell
+// bevor der noch ausstehende history.back()-Abbau abgeschlossen ist. Würde
+// das Overlay in diesem Zwischenzustand history.state prüfen, sähe es
+// fälschlich noch die ALTE (armed) Sperre, hielte sich selbst für bereits
+// ausreichend gesichert und würde NICHT erneut schaerfen - sobald der Abbau
+// dann doch noch durchläuft, stünde man mit offenem Overlay OHNE Sperre da,
+// und ein Zurück-Druck würde die App verlassen statt nur das Overlay zu
+// schließen. Jeder Aufrufer, der scharf stellen will, wartet deshalb zuerst
+// auf ein eventuell laufendes Abbauen.
+let hardwareBackGuardDisarmPending = null;
+
+// Entfernt eine ggf. noch bestehende Zurück-Sperre wieder, sobald das
+// Dashboard erreicht wird - notwendig, weil eine Sperre, die z.B. beim
+// App-Start oder bei früherer Navigation in eine Unteransicht gesetzt wurde,
+// sonst unverändert stehen bleibt (pushState/Sperren werden nie durch
+// normale Klick-Navigation zurückgebaut, siehe Kommentar bei
+// syncHardwareBackGuardForCurrentView()). Ohne dieses aktive Zurückfahren
+// "verpufft" der erste Zurück-Druck auf dem Dashboard wirkungslos an dieser
+// Alt-Sperre (kein Zurück-Button auf dem Dashboard klickbar), und erst ein
+// ZWEITER Druck verlässt tatsächlich die App - genau der seit Langem
+// gemeldete, unzuverlässige "manchmal einmal, manchmal zweimal"-Bug.
+function disarmHardwareBackGuardForDashboard() {
+  if (!(history.state && history.state.appBackGuard === true)) return Promise.resolve();
+  if (hardwareBackGuardDisarmPending) return hardwareBackGuardDisarmPending;
+  hardwareBackGuardSelfTriggeredPop = true;
+  hardwareBackGuardDisarmPending = new Promise((resolve) => {
+    const onSelfPop = () => {
+      window.removeEventListener("popstate", onSelfPop);
+      hardwareBackGuardDisarmPending = null;
+      resolve();
+    };
+    window.addEventListener("popstate", onSelfPop);
+  });
+  history.back();
+  return hardwareBackGuardDisarmPending;
+}
+
 // Hält die Zurück-Sperre synchron zur aktuell sichtbaren Ansicht - wird aus
 // render() heraus bei JEDER Bildschirmänderung aufgerufen, unabhängig davon,
 // ob sie durch einen normalen Klick oder durch die Zurück-Taste selbst
@@ -1698,21 +1747,37 @@ function ensureHardwareBackGuardArmed() {
 // wieder tief in die App navigierte (per Playwright gefundener, echter
 // Folgefehler der ersten Fassung) - die Sperre wurde dort nur im
 // popstate-Handler verwaltet, der bei normaler Navigation nie feuert.
-function syncHardwareBackGuardForCurrentView() {
+//
+// Bewusst async (fire-and-forget für alle bestehenden Aufrufer, die das
+// Ergebnis nie abwarten): siehe hardwareBackGuardDisarmPending oben.
+async function syncHardwareBackGuardForCurrentView() {
   // Auf dem Dashboard (und nur dort) soll der Zurück-Druck die App
   // tatsächlich verlassen können - Standard-Android-Verhalten: Zurück auf
-  // dem "Zuhause"-Bildschirm einer App beendet sie. Die Sperre wird deshalb
-  // hier bewusst NICHT nachgeschoben, solange kein Overlay (z.B. Backup-
-  // Erinnerung) offen ist - das hat weiterhin Vorrang und wird zuerst
+  // dem "Zuhause"-Bildschirm einer App beendet sie. Eine ggf. noch aktive
+  // Sperre wird deshalb hier aktiv abgebaut, solange kein Overlay (z.B.
+  // Backup-Erinnerung) offen ist - das hat weiterhin Vorrang und wird zuerst
   // geschlossen, statt die App direkt zu verlassen.
   const overlay = document.querySelector('[id$="Overlay"]');
-  if (getCurrentView() === "dashboard" && !overlay) return;
+  if (getCurrentView() === "dashboard" && !overlay) {
+    await disarmHardwareBackGuardForDashboard();
+    return;
+  }
+  if (hardwareBackGuardDisarmPending) await hardwareBackGuardDisarmPending;
   ensureHardwareBackGuardArmed();
 }
 
 function initHardwareBackButtonHandling() {
   pushHardwareBackGuard();
   window.addEventListener("popstate", () => {
+    if (hardwareBackGuardSelfTriggeredPop) {
+      // Eigener, programmatischer Abbau der Sperre (siehe
+      // disarmHardwareBackGuardForDashboard()) - kein echter Tastendruck,
+      // also keinen Zurück-Button suchen/klicken, nur den Zustand neu
+      // bewerten.
+      hardwareBackGuardSelfTriggeredPop = false;
+      syncHardwareBackGuardForCurrentView();
+      return;
+    }
     const target = findHardwareBackTarget();
     if (target) target.click();
     // target.click() löst normalerweise render() aus, das die Sperre über
@@ -1737,15 +1802,104 @@ export function showToast(message, duration = 4000) {
   setTimeout(() => toast.remove(), duration);
 }
 
-// Erinnerung an das Viewer-Backup als eigenständiges Overlay (als Kind von
-// document.body statt #app angehängt, damit es unabhängig von der gerade
-// angezeigten Ansicht sichtbar bleibt und von einem render()-Aufruf der
-// dahinterliegenden Ansicht nicht mit entfernt wird). Kein automatischer
-// Versand mehr (EmailJS wurde entfernt) - der Therapeut erledigt das
-// Backup per Klick selbst: Download und/oder E-Mail-Programm mit
-// vorbereitetem Anhangs-Hinweis öffnen. "Später erinnern" lässt die
-// Fälligkeit bewusst unverändert, damit die Erinnerung beim nächsten
-// Öffnen der App erneut erscheint.
+// Sichtbare, NICHT von selbst verschwindende Warnleiste für kritische
+// Fehler (siehe initGlobalErrorHandling() unten) - lebt außerhalb von #app
+// (überlebt also jeden render()-Aufruf) und bekommt bewusst eine id, die
+// NICHT auf "Overlay" endet, damit findHardwareBackTarget()/
+// syncHardwareBackGuardForCurrentView() sie nicht als modales Overlay
+// behandeln - die Android-Zurück-Taste soll durch die App navigieren
+// können, während diese Leiste sichtbar ist, statt daran hängen zu bleiben.
+let criticalErrorBannerEl = null;
+export function showCriticalErrorBanner(message) {
+  if (criticalErrorBannerEl) {
+    // Bereits sichtbar - Text aktualisieren statt eine zweite Leiste
+    // aufzubauen, falls kurz hintereinander mehrere Fehler auftreten.
+    const textEl = criticalErrorBannerEl.querySelector(".criticalErrorBannerText");
+    if (textEl) textEl.textContent = message;
+    return;
+  }
+
+  const banner = document.createElement("div");
+  banner.id = "criticalErrorBanner";
+  banner.style.cssText = "position:fixed; top:0; left:0; right:0; z-index:10000; background:#7f1d1d; color:#fff; padding:12px 16px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; box-shadow:0 4px 12px rgba(0,0,0,0.3); font-size:14px;";
+  banner.innerHTML = `
+    <span class="criticalErrorBannerText" style="flex:1; min-width:200px;">${escapeHtml(message)}</span>
+    <button id="criticalErrorBannerReloadBtn" style="margin:0; width:auto; padding:6px 14px; background:#fff; color:#7f1d1d;">Seite neu laden</button>
+    <button id="criticalErrorBannerCloseBtn" class="secondary" style="margin:0; width:auto; padding:6px 14px; background:transparent; border:1px solid #fff; color:#fff;">Schließen</button>
+  `;
+  document.body.appendChild(banner);
+  criticalErrorBannerEl = banner;
+
+  document.getElementById("criticalErrorBannerReloadBtn").onclick = () => window.location.reload();
+  document.getElementById("criticalErrorBannerCloseBtn").onclick = () => {
+    banner.remove();
+    criticalErrorBannerEl = null;
+  };
+}
+
+// Auffangnetz für sonst komplett unsichtbare Abstürze: bisher gab es KEINEN
+// globalen Fehler-Handler - ein einzelner unerwarteter Fehler irgendwo in
+// einem render()/Klick-Handler ließ die App einfach "einfrieren" (Klicks
+// tun nichts mehr), ohne jede Erklärung für den Therapeuten, was von außen
+// wie ein "Absturz" wirkt. Ebenso liefen etliche Speichervorgänge bewusst
+// "fire-and-forget" (siehe z.B. queuePersistRuntimeData()-Aufrufe ohne
+// await/catch) - schlägt so ein Hintergrund-Speichern fehl (z.B. voller
+// Gerätespeicher), verschwand der Fehler bisher spurlos, obwohl die gerade
+// gemachte Eingabe dadurch NICHT gespeichert wurde. Ersetzt kein sauberes
+// Fehlerhandling an der jeweiligen Stelle, macht aber jeden bisher
+// unsichtbaren Fehler wenigstens sichtbar, statt dass der Therapeut nie
+// erfährt, dass etwas schiefgelaufen ist.
+function initGlobalErrorHandling() {
+  window.addEventListener("error", (event) => {
+    console.error("Unerwarteter Fehler:", event.error || event.message);
+    showCriticalErrorBanner(
+      "Es ist ein unerwarteter technischer Fehler aufgetreten. Bitte die Seite neu laden - bereits gespeicherte Daten sind davon nicht betroffen, nur eine gerade eingegebene, noch nicht gespeicherte Änderung könnte verloren sein."
+    );
+  });
+
+  window.addEventListener("unhandledrejection", (event) => {
+    console.error("Unbehandelter Fehler (Hintergrundvorgang):", event.reason);
+    showCriticalErrorBanner(
+      "Eine Aktion konnte im Hintergrund nicht vollständig gespeichert werden. Bitte die zuletzt gemachte Eingabe prüfen und die Seite bei Unsicherheit neu laden."
+    );
+  });
+}
+
+initGlobalErrorHandling();
+
+// Lädt ganz ohne Klick/Overlay ein frisches Viewer-Backup herunter, sobald
+// das Intervall abgelaufen ist (siehe isAutoBackupDownloadDue() in
+// modules/backupReminder.js, Vorgabe des Nutzers: alle 5 Tage) - unabhängig
+// von der separaten, klickbasierten "Bitte senden"-Erinnerung weiter unten.
+// Landet im normalen Downloads-Ordner des Geräts, also AUSSERHALB des von
+// Browser-Speicher-Eviction betroffenen App-Speichers (siehe
+// Stabilitäts-Audit) - auf Betriebshandys dürfen sich die ZIP-Dateien dort
+// ausdrücklich ansammeln. Schlägt der Download fehl (z.B. blockiertes
+// Download-Popup), wird das nur geloggt und beim nächsten Öffnen erneut
+// versucht (lastAutoBackupDownloadAt bleibt in dem Fall unverändert) -
+// blockiert NICHT den Login-Vorgang.
+export async function triggerAutomaticBackupDownload(runtimeData) {
+  try {
+    const result = await buildBackupZip(runtimeData);
+    downloadBlob(result.blob, result.filename);
+    await markAutoBackupDownloadHandled(`Automatisches Backup "${result.filename}" heruntergeladen.`);
+    showToast(`Automatisches Backup heruntergeladen: ${result.filename}`, 6000);
+  } catch (err) {
+    console.error("Automatischer Backup-Download fehlgeschlagen:", err);
+  }
+}
+
+// Erinnerung, das zuletzt automatisch heruntergeladene (oder frisch hier
+// erstellte) Backup an die Praxis/den Viewer-PC zu SENDEN, damit der
+// separate Offline-Viewer regelmäßig auf den aktuellen Stand kommt -
+// eigenständiges Overlay (als Kind von document.body statt #app angehängt,
+// damit es unabhängig von der gerade angezeigten Ansicht sichtbar bleibt
+// und von einem render() der dahinterliegenden Ansicht nicht mit entfernt
+// wird). Kein automatischer Versand mehr (EmailJS wurde entfernt) - der
+// Therapeut erledigt das Senden per Klick selbst (Download und/oder
+// E-Mail-Programm mit vorbereitetem Anhangs-Hinweis öffnen). "Später
+// erinnern" lässt die Fälligkeit bewusst unverändert, damit die Erinnerung
+// beim nächsten Öffnen der App erneut erscheint.
 export function showBackupReminderModal({ onDone } = {}) {
   const runtimeData = getRuntimeData();
   if (!runtimeData) return;
@@ -1758,7 +1912,7 @@ export function showBackupReminderModal({ onDone } = {}) {
   overlay.innerHTML = `
     <div class="card" style="max-width:420px; width:100%; margin:0;">
       <h3>🔔 Backup-Erinnerung</h3>
-      <p class="muted">Für den separaten Offline-Viewer sollte regelmäßig ein Backup aller Praxisdaten erstellt werden.</p>
+      <p class="muted">Damit der separate Offline-Viewer aktuell bleibt, bitte regelmäßig ein Backup an die Praxis/den Viewer-PC senden.</p>
       <div class="row" style="flex-direction:column; gap:10px; margin-top:16px;">
         <button id="backupReminderDownloadBtn" style="margin-top:0;">Als Datei herunterladen</button>
         <button id="backupReminderMailBtn" class="secondary" style="margin-top:0;">Per E-Mail senden (mailto)</button>
@@ -1768,9 +1922,19 @@ export function showBackupReminderModal({ onDone } = {}) {
     </div>
   `;
   document.body.appendChild(overlay);
+  // Overlays hängen außerhalb von #app direkt in <body> und lösen deshalb
+  // KEIN render() aus - ohne diesen expliziten Sync bliebe die Zurück-Sperre
+  // z.B. auf dem Dashboard deaktiviert, und ein Zurück-Druck würde die App
+  // sofort verlassen statt nur diesen Dialog zu schließen.
+  syncHardwareBackGuardForCurrentView();
 
   function close() {
     overlay.remove();
+    // Nicht auf ein render() durch onDone() verlassen, um die Sperre
+    // zurückzusetzen - onDone() rendert zwar in der Praxis meist neu, aber
+    // ohne diesen expliziten Sync hier bliebe die Sperre bei jedem
+    // zukünftigen Aufrufer ohne re-render fälschlich scharf.
+    syncHardwareBackGuardForCurrentView();
     if (onDone) onDone();
   }
 
@@ -1808,7 +1972,6 @@ export function showBackupReminderModal({ onDone } = {}) {
       window.location.href = buildBackupReminderMailtoLink({
         filename: result.filename,
         therapistName: runtimeData.settings?.therapistName,
-        therapistEmail: runtimeData.settings?.therapistEmail,
         bueroEmail: runtimeData.settings?.buero?.email
       });
       await markBackupReminderHandled(`Backup "${result.filename}" heruntergeladen, E-Mail-Programm geöffnet (Anhang manuell hinzufügen).`);
@@ -1846,6 +2009,11 @@ function showAssessmentVerschiebenModal({ homeId, patientId, onDone }) {
     </div>
   `;
   document.body.appendChild(overlay);
+  // Overlays hängen außerhalb von #app direkt in <body> und lösen deshalb
+  // KEIN render() aus - ohne diesen expliziten Sync bliebe die Zurück-Sperre
+  // z.B. auf dem Dashboard deaktiviert, und ein Zurück-Druck würde die App
+  // sofort verlassen statt nur diesen Dialog zu schließen.
+  syncHardwareBackGuardForCurrentView();
 
   const input = document.getElementById("assessmentVerschiebenDatum");
   bindDateAutoFormat(input);
@@ -1853,6 +2021,11 @@ function showAssessmentVerschiebenModal({ homeId, patientId, onDone }) {
 
   function close() {
     overlay.remove();
+    // Kein render() bei einem reinen Abbrechen/Schließen per Klick (im
+    // Unterschied zum Hardware-Zurück-Pfad, der diesen Sync bereits selbst
+    // im popstate-Handler nachzieht) - ohne diesen Aufruf bliebe die Sperre
+    // nach dem Schließen fälschlich scharf, z.B. auf dem Dashboard.
+    syncHardwareBackGuardForCurrentView();
   }
 
   document.getElementById("assessmentVerschiebenCancelBtn").onclick = close;
@@ -2476,6 +2649,12 @@ export function showSetupView({ onSuccess }) {
   hideLockButton();
 
   render(`
+    <div class="card" style="background:#fffbeb; border-color:#f59e0b;">
+      <h3>⚠️ Schon einmal genutzt?</h3>
+      <p class="muted">Falls FaSt App auf diesem Gerät bereits eingerichtet war und dieser Bildschirm unerwartet erscheint, wurden die bisherigen Daten vermutlich vom Browser gelöscht. Bitte in diesem Fall ZUERST hier ein Backup wiederherstellen, statt unten eine neue Einrichtung anzulegen - sonst gehen eventuell noch vorhandene Daten endgültig verloren.</p>
+      <button id="restoreBackupBtnTop" class="secondary" style="margin-top:8px;">Backup wiederherstellen</button>
+    </div>
+
     <div class="card">
       <h2>Ersteinrichtung</h2>
       <p class="muted">FaSt App wird jetzt mit Praxispasswort und PIN abgesichert.</p>
@@ -2523,6 +2702,9 @@ export function showSetupView({ onSuccess }) {
   bindDateAutoFormat(document.getElementById("fastStartDatum"));
 
   document.getElementById("restoreBackupBtn").onclick = () => {
+    document.getElementById("restoreBackupInput").click();
+  };
+  document.getElementById("restoreBackupBtnTop").onclick = () => {
     document.getElementById("restoreBackupInput").click();
   };
 
@@ -2580,6 +2762,16 @@ export function showSetupView({ onSuccess }) {
 
     if (pin !== pinRepeat) {
       msg.textContent = "Die PIN stimmt nicht überein.";
+      return;
+    }
+
+    // Diese Bestätigung ist ausschließlich ein Sicherheitsnetz gegen den
+    // Fall, dass dieser Bildschirm NICHT bei einer echten Erstinstallation
+    // erscheint, sondern weil der Browser zuvor bestehende Praxisdaten
+    // gelöscht hat (siehe Warnkarte oben) - eine Ersteinrichtung
+    // überschreibt etwaige, technisch noch vorhandene Restdaten
+    // unwiederbringlich.
+    if (!confirm("Wirklich eine NEUE Ersteinrichtung anlegen?\n\nFalls auf diesem Gerät schon einmal FaSt-App-Daten gespeichert waren, werden diese dabei unwiederbringlich überschrieben. Bei einem wirklich neuen Gerät/einer neuen Praxis auf \"OK\" klicken, ansonsten \"Abbrechen\" und zuerst ein Backup wiederherstellen.")) {
       return;
     }
 
@@ -2774,9 +2966,6 @@ export function showSettingsView({ onLock }) {
       <label for="settingsTherapistName">Therapeutenname</label>
       <input id="settingsTherapistName" type="text" autocomplete="off" value="${escapeHtml(settings.therapistName || "")}">
 
-      <label for="settingsTherapistEmail">Therapeuten-E-Mail</label>
-      <input id="settingsTherapistEmail" type="email" autocomplete="off" value="${escapeHtml(settings.therapistEmail || "")}" placeholder="name@praxis.de">
-
       <label>Praxisadresse</label>
       <p class="muted" style="white-space:pre-line; border:1px solid var(--border); border-radius:10px; padding:10px 12px; margin-top:4px;">${escapeHtml(PRACTICE_ADDRESS)}</p>
 
@@ -2794,22 +2983,17 @@ export function showSettingsView({ onLock }) {
 
       <label for="settingsFastStartDatum">Startdatum bei FaSt</label>
       <input id="settingsFastStartDatum" type="text" inputmode="numeric" autocomplete="off" value="${escapeHtml(formatDeDate(getFastStartDatumComparable(settings)))}" placeholder="TT.MM.JJJJ">
-      <p class="muted">Ab diesem Datum werden Zeiten aus der App fürs Stundenkonto berücksichtigt.</p>
 
       <label for="settingsStundenStartsaldo">Startsaldo Stundenkonto</label>
       <input id="settingsStundenStartsaldo" type="text" inputmode="numeric" autocomplete="off" value="${escapeHtml(getSignedMinutesLabel(getStundenStartsaldoMinutes(settings)).replace(' Stunden', ''))}" placeholder="z. B. +40:00 oder -12:30">
-      <p class="muted">Plus-/Minusstunden vor App-Einführung. Wird zum Stundenkonto addiert.</p>
 
       <label for="settingsJahresurlaubTage">Jahresurlaub (Tage)</label>
       <input id="settingsJahresurlaubTage" type="text" inputmode="numeric" autocomplete="off" value="${escapeHtml(String(settings.jahresurlaubTage || 0))}" placeholder="z. B. 30">
-      <p class="muted">Wird für das Urlaubskonto von FaSti verwendet (Anspruch minus genommene Urlaubstage).</p>
 
       <h3 style="margin-top:20px;">FaSti</h3>
       <label class="check-chip"><input id="settingsFastiEnabled" type="checkbox" ${settings.fastiEnabled !== false ? "checked" : ""}> <span>FaSti aktiviert</span></label>
-      <p class="muted">Schaltet den FaSti-Assistenten (Button, Hinweise, Chat) komplett ein oder aus. Wirkt sofort nach dem Speichern, ohne erneutes Einloggen. Standardmäßig aktiviert.</p>
 
       <h3 style="margin-top:20px;">Zertifikate</h3>
-      <p class="muted">Wird für die Rezeptoptimierung (Vorschläge nur für zertifizierte Heilmittel) verwendet.</p>
       <div class="checkbox-row">
         <label class="check-chip"><input id="zertMt" type="checkbox" ${settings.zertifikate?.mt ? "checked" : ""}> <span>MT</span></label>
         <label class="check-chip"><input id="zertMld" type="checkbox" ${settings.zertifikate?.mld ? "checked" : ""}> <span>MLD</span></label>
@@ -2846,7 +3030,6 @@ export function showSettingsView({ onLock }) {
 
   document.getElementById("saveSettingsBtn").onclick = async () => {
     const therapistName = document.getElementById("settingsTherapistName").value.trim();
-    const therapistEmail = document.getElementById("settingsTherapistEmail").value.trim();
     const practiceAddress = PRACTICE_ADDRESS;
     const practicePhone = PRACTICE_PHONE;
     const therapistFax = document.getElementById("settingsTherapistFax").value.trim();
@@ -2893,7 +3076,6 @@ export function showSettingsView({ onLock }) {
     try {
       mutateRuntimeData((data) => {
         data.settings.therapistName = therapistName;
-        data.settings.therapistEmail = therapistEmail;
         data.settings.practiceAddress = practiceAddress;
         data.settings.practicePhone = practicePhone;
         data.settings.therapistFax = therapistFax;
@@ -2948,39 +3130,6 @@ export function showSettingsView({ onLock }) {
   };
 }
 
-function formatBackupReminderHistoryLine(entry) {
-  const time = entry.createdAt ? new Date(entry.createdAt).toLocaleString("de-DE") : "";
-  const icon = entry.status === "handled" ? "✅" : "⏭";
-  return `<div class="row" style="padding:6px 0;">
-    <strong>${icon} ${escapeHtml(time)}</strong>
-  </div>`;
-}
-
-function renderBackupReminderAccordion(runtimeData) {
-  const history = Array.isArray(runtimeData?.autoExportHistory) ? runtimeData.autoExportHistory : [];
-  const lastAt = runtimeData?.ui?.lastAutoExportAt || "";
-
-  const statusSummary = lastAt ? "Zuletzt erledigt" : "Noch nicht erledigt";
-
-  return `
-    <details class="accordion">
-      <summary>
-        <span>Backup-Erinnerung</span>
-        <span class="muted">${escapeHtml(statusSummary)}</span>
-      </summary>
-      <div class="accordion-body">
-        <p class="muted">${escapeHtml(lastAt ? `Zuletzt erledigt: ${new Date(lastAt).toLocaleString("de-DE")}` : "Noch nicht erledigt.")}</p>
-        <button id="backupReminderNowBtn" class="secondary" style="margin-top:0;">Jetzt Backup machen</button>
-        ${history.length ? `
-          <div style="margin-top:16px;">
-            <div class="muted" style="font-weight:600; margin-bottom:4px;">Verlauf (letzte ${Math.min(history.length, 5)}):</div>
-            ${history.slice(0, 5).map(formatBackupReminderHistoryLine).join("")}
-          </div>
-        ` : ""}
-      </div>
-    </details>
-  `;
-}
 
 export function showDashboardView({ onLock, keepOverviewOpen = false } = {}) {
   bindLockButton(onLock);
@@ -3141,8 +3290,6 @@ export function showDashboardView({ onLock, keepOverviewOpen = false } = {}) {
       </div>
     </details>
 
-    ${renderBackupReminderAccordion(runtimeData)}
-
     <details class="accordion">
       <summary>
         <span>App zurücksetzen</span>
@@ -3217,7 +3364,7 @@ export function showDashboardView({ onLock, keepOverviewOpen = false } = {}) {
             });
           });
         });
-      });
+      }, { silent: true });
       await queuePersistRuntimeData();
 
       const result = await exportBackup(getRuntimeData());
@@ -3230,10 +3377,6 @@ export function showDashboardView({ onLock, keepOverviewOpen = false } = {}) {
       msg.className = "error";
       msg.textContent = `Backup-Export fehlgeschlagen: ${err.message || err}`;
     }
-  };
-
-  document.getElementById("backupReminderNowBtn").onclick = () => {
-    showBackupReminderModal({ onDone: () => showDashboardView({ onLock, keepOverviewOpen: true }) });
   };
 
   document.getElementById("importBackupBtn").onclick = () => {
@@ -6558,7 +6701,6 @@ export function showNachbestellungView({ onLock, doctorFilter = "", textFilter =
   const tree = buildNachbestellTree(data, doctorFilter, textFilter);
   const selected = new Set(normalizedSelectedIds);
   const therapistName = data?.settings?.therapistName || "";
-  const therapistEmail = data?.settings?.therapistEmail || "";
 
   setCurrentView("nachbestellung", { doctorFilter, textFilter, selectedIds: normalizedSelectedIds });
 
@@ -6819,7 +6961,7 @@ export function showNachbestellungView({ onLock, doctorFilter = "", textFilter =
         // Muster nutzen bereits "Urlaub/Krank" und "Freikuvert bestellen").
         // Die Ansicht wird deshalb hier NICHT sofort zurückgesetzt, damit
         // dieser Link sichtbar und klickbar bleibt.
-        const mailtoHref = buildNachbestellMailtoLink({ letterData, lines, arztEmail, therapistName, therapistEmail });
+        const mailtoHref = buildNachbestellMailtoLink({ letterData, lines, arztEmail, therapistName });
         msg.className = "";
         msg.innerHTML = `
           <p>Nachbestellzettel geöffnet - bitte als PDF speichern, dann unten auf "E-Mail öffnen" klicken und die PDF-Datei anhängen.</p>
@@ -7424,16 +7566,13 @@ function escapeHtml(value) {
 // ─────────────────────────────────────────────
 
 // Gemeinsamer mailto-Baustein für alle E-Mail-Versand-Stellen der App
-// (Abwesenheit, Freikuvert, Nachbestellung) - cc wird nur angehängt, wenn
-// eine Therapeuten-E-Mail in den Einstellungen hinterlegt ist, damit der
-// Therapeut selbst eine Kopie der versendeten Mails erhält.
-function buildMailtoLink({ to, subject, body, cc = "" }) {
+// (Abwesenheit, Freikuvert, Nachbestellung).
+function buildMailtoLink({ to, subject, body }) {
   const params = [`subject=${encodeURIComponent(subject)}`, `body=${encodeURIComponent(body)}`];
-  if (cc) params.push(`cc=${encodeURIComponent(cc)}`);
   return `mailto:${encodeURIComponent(to || "")}?${params.join("&")}`;
 }
 
-function buildAbwesenheitMailtoLink({ email, therapistName, therapistEmail, type, from, to }) {
+function buildAbwesenheitMailtoLink({ email, therapistName, type, from, to }) {
   const artLabel = type === "krank" ? "Krank" : "Urlaub";
   const subject = `Abwesenheitsmeldung – ${therapistName || "FaSt"}`;
   const body = [
@@ -7448,7 +7587,7 @@ function buildAbwesenheitMailtoLink({ email, therapistName, therapistEmail, type
     "Mit freundlichen Grüßen",
     therapistName || "—"
   ].join("\n");
-  return buildMailtoLink({ to: email, subject, body, cc: therapistEmail });
+  return buildMailtoLink({ to: email, subject, body });
 }
 
 export function showAbwesenheitView({ onLock }) {
@@ -7458,7 +7597,6 @@ export function showAbwesenheitView({ onLock }) {
   const runtimeData = getRuntimeData();
   const homes = sortHomesAlpha(runtimeData?.homes || []);
   const therapistName = runtimeData?.settings?.therapistName || "";
-  const therapistEmail = runtimeData?.settings?.therapistEmail || "";
   let confirmData = null;
 
   function renderForm() {
@@ -7592,7 +7730,7 @@ export function showAbwesenheitView({ onLock }) {
             ${homesWithEmail.map((home) => `
               <div class="compact-card" style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
                 <div>${escapeHtml(home.name || "Ohne Name")}</div>
-                <a class="mailtoAbwesenheitLink" style="width:auto;" href="${buildAbwesenheitMailtoLink({ email: home.verwaltungsEmail, therapistName, therapistEmail, type, from, to })}"><button type="button" style="width:auto; margin:0;">E-Mail öffnen</button></a>
+                <a class="mailtoAbwesenheitLink" style="width:auto;" href="${buildAbwesenheitMailtoLink({ email: home.verwaltungsEmail, therapistName, type, from, to })}"><button type="button" style="width:auto; margin:0;">E-Mail öffnen</button></a>
               </div>
             `).join("")}
           </div>
@@ -7614,20 +7752,20 @@ export function showAbwesenheitView({ onLock }) {
   renderForm();
 }
 
-function buildFreikuvertMailtoLink({ bueroEmail, arztName, arztAdresse, therapistName, therapistEmail }) {
+function buildFreikuvertMailtoLink({ bueroEmail, arztName, arztAdresse, therapistName }) {
   const subject = `Freikuvert-Bestellung – ${arztName}`;
   const body = [
     `Bitte Freikuverts senden an: ${arztName} ${arztAdresse || ""}`.trim(),
     `Bestellt von: ${therapistName || "—"}`
   ].join("\n");
-  return buildMailtoLink({ to: bueroEmail, subject, body, cc: therapistEmail });
+  return buildMailtoLink({ to: bueroEmail, subject, body });
 }
 
 // mailto kann keine Datei anhängen - der Nachbestellzettel wird deshalb vorher
 // als Druckvorschau geöffnet (dort kann der Therapeut z.B. "Als PDF speichern"
 // wählen), und die E-Mail listet die angefragten Verordnungen als Text auf,
 // mit dem Hinweis, den soeben geöffneten Zettel manuell anzuhängen.
-function buildNachbestellMailtoLink({ letterData, lines, arztEmail, therapistName, therapistEmail }) {
+function buildNachbestellMailtoLink({ letterData, lines, arztEmail, therapistName }) {
   const subject = `Rezeptnachbestellung Physiotherapie – ${therapistName || "FaSt"}`;
   const body = [
     `Sehr geehrte(r) ${letterData.doctor || ""},`,
@@ -7639,7 +7777,7 @@ function buildNachbestellMailtoLink({ letterData, lines, arztEmail, therapistNam
     `Vielen Dank,`,
     therapistName || ""
   ].join("\n");
-  return buildMailtoLink({ to: arztEmail, subject, body, cc: therapistEmail });
+  return buildMailtoLink({ to: arztEmail, subject, body });
 }
 
 export function showFreikuvertView({ onLock }) {
@@ -7649,7 +7787,6 @@ export function showFreikuvertView({ onLock }) {
   const runtimeData = getRuntimeData();
   const aerzte = getArztRegistry(runtimeData);
   const therapistName = runtimeData?.settings?.therapistName || "";
-  const therapistEmail = runtimeData?.settings?.therapistEmail || "";
   const bueroEmail = runtimeData?.settings?.buero?.email || "";
 
   function renderForm(message = "") {
@@ -7749,7 +7886,7 @@ export function showFreikuvertView({ onLock }) {
       </div>
 
       <div class="card">
-        <a href="${buildFreikuvertMailtoLink({ bueroEmail, arztName, arztAdresse, therapistName, therapistEmail })}"><button type="button">E-Mail ans Büro öffnen</button></a>
+        <a href="${buildFreikuvertMailtoLink({ bueroEmail, arztName, arztAdresse, therapistName })}"><button type="button">E-Mail ans Büro öffnen</button></a>
       </div>
     `);
 
@@ -8961,6 +9098,7 @@ function fastiActionLabel(action) {
   if (action?.type === "abwesenheit_anlegen") return "Eintragen";
   if (action?.type === "patient_ausgeschieden_setzen") return action.value ? "Als ausgeschieden markieren" : "Wieder aktivieren";
   if (action?.type === "doku_nachtragen") return "Dokumentieren";
+  if (action?.type === "rezept_bearbeiten") return "Rezept bearbeiten";
   return "Bestätigen";
 }
 
@@ -9020,6 +9158,19 @@ function bindFastiNoticeButtons() {
           patientId: notice.action.patientId,
           prefillDate: notice.action.date,
           prefillRezeptId: notice.action.rezeptId
+        });
+        return;
+      }
+      if (notice.action.type === "rezept_bearbeiten") {
+        // Reine Navigation - öffnet das betroffene Rezept direkt zur
+        // Bearbeitung, damit ICD-10/Arzt/Leitsymptomatik nachgetragen werden
+        // können.
+        setFastiPanelOpen(false);
+        showEditRezeptView({
+          onLock: fastiOnLock,
+          homeId: notice.action.homeId,
+          patientId: notice.action.patientId,
+          rezeptId: notice.action.rezeptId
         });
         return;
       }

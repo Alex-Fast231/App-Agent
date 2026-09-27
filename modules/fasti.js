@@ -36,6 +36,7 @@ import {
 } from "./homes.js";
 import { getRezeptFristInfo, getRezeptGueltigBisComparable } from "./fristen.js";
 import { optimiereVerordnung, EMPFEHLUNG_ZU_ITEM_TYPE } from "./rezeptoptimierung.js";
+import { validateRezeptPflichtfelder } from "./rezeptpruefung.js";
 
 const PRIORITY_ORDER = { rot: 0, orange: 1, gelb: 2 };
 
@@ -194,6 +195,47 @@ export function buildRezeptNotices(data) {
             action: null
           });
         }
+      });
+    });
+  });
+
+  return notices;
+}
+
+// Meldet Rezepte, bei denen zwar schon eine Leistung ausgewählt ist (Doku und
+// Zeiterfassung laufen also bewusst weiter, siehe ui/views.js), aber
+// Angaben fehlen, die für ein gültiges Kassenrezept zwingend nötig sind. Nur
+// die drei am Anfang typischerweise fehlenden Angaben werden hier gemeldet
+// (ICD-10, Arzt, Leitsymptomatik) - die übrigen von
+// validateRezeptPflichtfelder() geprüften Felder (Hausbesuch, Stempel,
+// Unterschrift, Ausstellungsdatum) betreffen die spätere Abgabe/Frist und
+// würden hier nur unnötig früh nerven.
+const REZEPT_UNVOLLSTAENDIG_FELDER = ["icd10", "arzt", "leitsymptomatik"];
+
+function buildRezeptUnvollstaendigNotices(data) {
+  const notices = [];
+
+  (data?.homes || []).forEach((home) => {
+    (home.patients || []).forEach((patient) => {
+      if (patient.verstorben || patient.ausgeschieden) return;
+
+      (patient.rezepte || []).forEach((rezept) => {
+        if (rezept.abgegeben) return;
+
+        const { errors } = validateRezeptPflichtfelder(rezept);
+        const relevanteFehler = errors.filter((e) => REZEPT_UNVOLLSTAENDIG_FELDER.includes(e.field));
+        if (!relevanteFehler.length) return;
+
+        const patientName = fullPatientName(patient);
+        const fehlendeLabels = relevanteFehler.map((e) => e.message.replace(/\s*fehlt\.$/, ""));
+
+        notices.push({
+          id: `rezept-unvollstaendig-${rezept.rezeptId}`,
+          bereich: "rezepte",
+          priority: "gelb",
+          text: `Bitte das Rezept von ${patientName} vervollständigen (fehlt: ${fehlendeLabels.join(", ")}).`,
+          action: { type: "rezept_bearbeiten", homeId: home.homeId, patientId: patient.patientId, rezeptId: rezept.rezeptId, patientName }
+        });
       });
     });
   });
@@ -408,7 +450,7 @@ export function markWeeklySummaryShown() {
   mutateRuntimeData((data) => {
     if (!data.ui) data.ui = {};
     data.ui.lastFastiWeeklySummaryAt = new Date().toISOString();
-  });
+  }, { silent: true });
 }
 
 function countArbeitstageInAbsence(settings, absence) {
@@ -525,6 +567,7 @@ function buildZuzahlungNotices(data) {
 export function buildFastiNotices(data) {
   const notices = [
     ...buildRezeptNotices(data),
+    ...buildRezeptUnvollstaendigNotices(data),
     ...buildAssessmentNotices(data),
     ...buildZuzahlungNotices(data),
     ...buildDokuFehltNotices(data)

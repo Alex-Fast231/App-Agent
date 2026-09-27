@@ -1,12 +1,12 @@
 import { generateId } from "../core/utils.js";
 
 export const APP_SCHEMA_VERSION = 3;
-// Bei jeder inhaltlichen Änderung an der App (jede neue Session/jedes
-// Update) muss diese Zahl von Hand erhöht werden - es gibt keinen
-// automatischen Build-Schritt dafür, und die Versionsanzeige im Dashboard
-// ist für den Therapeuten die einzige sichtbare Bestätigung, dass ein
-// Update tatsächlich angekommen ist.
-export const APP_VERSION = "3.10.0";
+// Die Patch-Zahl wird automatisch durch den Git-Hook .githooks/pre-commit
+// bei jedem Commit mit Code-Änderungen erhöht (siehe CLAUDE.md) - von Hand
+// anfassen nur für einen bewussten Minor-/Major-Sprung. Die Versionsanzeige
+// im Dashboard ist für den Therapeuten die einzige sichtbare Bestätigung,
+// dass ein Update tatsächlich angekommen ist.
+export const APP_VERSION = "3.10.6";
 export const APP_MODULE = "doku";
 
 export const PRACTICE_ADDRESS = `Physio Strobl
@@ -28,7 +28,6 @@ export function createEmptyAppData() {
     settings: {
       therapistId: generateId("therapist"),
       therapistName: "",
-      therapistEmail: "",
       therapistFax: "",
       practicePhone: PRACTICE_PHONE,
       practiceAddress: PRACTICE_ADDRESS,
@@ -96,6 +95,8 @@ export function createEmptyAppData() {
     ui: {
       lastBackupAt: "",
       lastAutoExportAt: "",
+      lastAutoBackupDownloadAt: "",
+      lastDataChangeAt: "",
       lastFastiWeeklySummaryAt: ""
     }
   };

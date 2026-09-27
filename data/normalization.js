@@ -638,7 +638,7 @@ function normalizeAutoExportHistory(items) {
     return {
       id: ensureString(source.id) || generateId("autoexport"),
       createdAt: ensureIsoString(source.createdAt, new Date().toISOString()),
-      status: ["handled", "postponed"].includes(source.status) ? source.status : "postponed",
+      status: ["handled", "postponed", "auto-download"].includes(source.status) ? source.status : "postponed",
       message: ensureString(source.message)
     };
   }).slice(0, 20);
@@ -664,7 +664,6 @@ export function finalizeAppStructure(data) {
     settings: {
       therapistId: ensureString(settings.therapistId) || generateId("therapist"),
       therapistName: ensureString(settings.therapistName),
-      therapistEmail: ensureString(settings.therapistEmail),
       therapistFax: ensureString(settings.therapistFax),
       practicePhone: ensureString(settings.practicePhone),
       practiceAddress: ensureString(settings.practiceAddress, PRACTICE_ADDRESS),
@@ -725,6 +724,8 @@ export function finalizeAppStructure(data) {
     ui: {
       lastBackupAt: ensureIsoString(source.ui?.lastBackupAt),
       lastAutoExportAt: ensureIsoString(source.ui?.lastAutoExportAt),
+      lastAutoBackupDownloadAt: ensureIsoString(source.ui?.lastAutoBackupDownloadAt),
+      lastDataChangeAt: ensureIsoString(source.ui?.lastDataChangeAt),
       lastFastiWeeklySummaryAt: ensureIsoString(source.ui?.lastFastiWeeklySummaryAt)
     }
   };
