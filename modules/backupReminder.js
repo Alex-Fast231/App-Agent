@@ -15,10 +15,14 @@ import { mutateRuntimeData, queuePersistRuntimeData } from "../core/app-core.js"
 //    ÄNDERUNGSBASIERT - sobald seit dem letzten Auto-Download neue,
 //    ungesicherte Daten erkannt werden (siehe isAutoBackupDownloadDue()
 //    unten) - mit BACKUP_AUTO_DOWNLOAD_INTERVAL_DAYS Tagen als zusätzliche
-//    Sicherheitsuntergrenze. Landet im normalen Downloads-Ordner des
-//    Geräts, also AUSSERHALB des von Browser-Eviction betroffenen
-//    App-Speichers. Vorgabe des Nutzers: Betriebshandys, viele angesammelte
-//    ZIP-Dateien sind unkritisch.
+//    Sicherheitsuntergrenze. Erzeugt (über exportBackup() in modules/backup.js,
+//    siehe triggerAutomaticBackupDownload() in ui/views.js) das VOLLSTÄNDIGE,
+//    über "Backup wiederherstellen" rückspielbare Backup - nicht nur die
+//    reine Viewer-Datei -, damit ein Totalverlust der App auf dem Gerät
+//    auch ohne manuellen Export abgefangen werden kann. Landet im normalen
+//    Downloads-Ordner des Geräts, also AUSSERHALB des von Browser-Eviction
+//    betroffenen App-Speichers. Vorgabe des Nutzers: Betriebshandys, viele
+//    angesammelte ZIP-Dateien sind unkritisch.
 // 2. Die bisherige, klickbasierte Erinnerung ("Backup-Erinnerung"-Overlay,
 //    siehe showBackupReminderModal() in ui/views.js) bleibt zusätzlich
 //    bestehen, aber jetzt als reine "Bitte an die Praxis/den Viewer-PC

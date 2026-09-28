@@ -252,6 +252,7 @@ function buildRezeptUnvollstaendigNotices(data) {
 function buildDokuFehltNotices(data) {
   const notices = [];
   const todayComparable = getComparableFromDate(new Date());
+  const fastStartComparable = getFastStartDatumComparable(data?.settings);
 
   (data?.homes || []).forEach((home) => {
     (home.patients || []).forEach((patient) => {
@@ -283,6 +284,12 @@ function buildDokuFehltNotices(data) {
           if (dokuDates.has(entry.date)) return;
           const comparable = parseDeDate(entry.date);
           if (!comparable || comparable >= todayComparable) return;
+          // FaSt-Startdatum: Behandlungen von VOR dem Umstieg auf FaSt wurden
+          // in der vorherigen App dokumentiert - FaSti kennt diese Alt-Doku
+          // nicht und soll dafür keine Phantom-Meldung erzeugen. Die
+          // Zeiterfassung selbst (Saldo/Stunden) bleibt davon unberührt, nur
+          // diese "Dokueintrag fehlt"-Prüfung greift erst ab dem Startdatum.
+          if (fastStartComparable && comparable < fastStartComparable) return;
           missingDates.add(entry.date);
         });
 

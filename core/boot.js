@@ -161,8 +161,10 @@ function initiateFasti() {
 
 // Läuft nach jedem Entsperren zwei UNABHÄNGIGE Backup-Routinen (siehe
 // modules/backupReminder.js): (1) der stille, automatische Download alle 5
-// Tage - kein Klick nötig, landet im Downloads-Ordner des Geräts, damit
-// auch ohne jedes Zutun regelmäßig eine Sicherung außerhalb des von
+// Tage bzw. sofort bei neuen Änderungen - kein Klick nötig, erzeugt das
+// VOLLSTÄNDIGE, über "Backup wiederherstellen" rückspielbare Backup (nicht
+// nur die reine Viewer-Datei) und landet im Downloads-Ordner des Geräts,
+// damit auch ohne jedes Zutun regelmäßig eine Sicherung außerhalb des von
 // Browser-Eviction betroffenen App-Speichers existiert (Vorgabe des
 // Nutzers, u.a. wegen der auf Betriebshandys unkritischen ZIP-Ansammlung);
 // (2) die bestehende, klickbasierte "Bitte senden"-Erinnerung alle 7 Tage,

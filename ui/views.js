@@ -1867,20 +1867,26 @@ function initGlobalErrorHandling() {
 
 initGlobalErrorHandling();
 
-// Lädt ganz ohne Klick/Overlay ein frisches Viewer-Backup herunter, sobald
-// das Intervall abgelaufen ist (siehe isAutoBackupDownloadDue() in
-// modules/backupReminder.js, Vorgabe des Nutzers: alle 5 Tage) - unabhängig
-// von der separaten, klickbasierten "Bitte senden"-Erinnerung weiter unten.
-// Landet im normalen Downloads-Ordner des Geräts, also AUSSERHALB des von
+// Lädt ganz ohne Klick/Overlay ein frisches, VOLLSTÄNDIGES Backup herunter,
+// sobald das Intervall abgelaufen ist (siehe isAutoBackupDownloadDue() in
+// modules/backupReminder.js, Vorgabe des Nutzers: alle 5 Tage bzw. sofort bei
+// neuen Änderungen) - unabhängig von der separaten, klickbasierten "Bitte
+// senden"-Erinnerung weiter unten. Nutzt exportBackup() (dieselbe Funktion
+// wie der manuelle "Backup exportieren"-Button), NICHT das reine
+// buildBackupZip() - damit sich diese Datei über "Backup wiederherstellen"
+// auch tatsächlich zur kompletten Wiederherstellung der App nutzen lässt,
+// statt nur im separaten Offline-Viewer lesbar zu sein (enthält zusätzlich
+// die appData.json, ist also weiterhin auch viewer-kompatibel). Landet im
+// normalen Downloads-Ordner des Geräts, also AUSSERHALB des von
 // Browser-Speicher-Eviction betroffenen App-Speichers (siehe
 // Stabilitäts-Audit) - auf Betriebshandys dürfen sich die ZIP-Dateien dort
 // ausdrücklich ansammeln. Schlägt der Download fehl (z.B. blockiertes
-// Download-Popup), wird das nur geloggt und beim nächsten Öffnen erneut
-// versucht (lastAutoBackupDownloadAt bleibt in dem Fall unverändert) -
-// blockiert NICHT den Login-Vorgang.
+// Download-Popup oder Runtime-Key noch nicht verfügbar), wird das nur
+// geloggt und beim nächsten Öffnen erneut versucht (lastAutoBackupDownloadAt
+// bleibt in dem Fall unverändert) - blockiert NICHT den Login-Vorgang.
 export async function triggerAutomaticBackupDownload(runtimeData) {
   try {
-    const result = await buildBackupZip(runtimeData);
+    const result = await exportBackup(runtimeData);
     downloadBlob(result.blob, result.filename);
     await markAutoBackupDownloadHandled(`Automatisches Backup "${result.filename}" heruntergeladen.`);
     showToast(`Automatisches Backup heruntergeladen: ${result.filename}`, 6000);
