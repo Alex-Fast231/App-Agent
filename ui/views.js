@@ -3793,6 +3793,12 @@ function renderQuickDocFields(patient, prefillDate = "", prefillRezeptId = "") {
       </div>
     `}
 
+    <div id="quickDocLastEntryBox-${patient.patientId}" class="compact-card" style="display:none; margin-bottom:10px; background:#eff6ff; border-color:#93c5fd;">
+      <div style="font-weight:600; margin-bottom:6px;">📋 Vom letzten Mal (<span id="quickDocLastEntryDate-${patient.patientId}"></span>)</div>
+      <div id="quickDocLastEntryText-${patient.patientId}" class="muted" style="white-space:pre-wrap; margin-bottom:10px;"></div>
+      <button type="button" id="quickDocUseLastBtn-${patient.patientId}" class="secondary" style="margin:0; width:auto;">Vom letzten Mal übernehmen</button>
+    </div>
+
     <label for="quickDocText-${patient.patientId}">Dokumentation</label>
     <div class="compact-card" style="margin-bottom:10px; padding:14px;">
       <textarea id="quickDocText-${patient.patientId}" rows="4" placeholder="Dokumentation direkt zum Rezept speichern" style="width:100%; border:none; outline:none; resize:vertical; background:transparent; font:inherit; color:inherit; min-height:96px;"></textarea>
@@ -3825,8 +3831,61 @@ function bindQuickDocHandlers({ homeId, patient, onSaved }) {
         }
       });
       check.closest('.check-chip')?.classList.add('is-checked');
+      updateQuickDocLastEntryPreview(check.dataset.rezeptId);
     });
   });
+
+  // "Vom letzten Mal übernehmen" (Kollegen-Wunsch): zeigt oberhalb des
+  // Textfelds den zuletzt geschriebenen Doku-Text zum aktuell gewählten
+  // Zielrezept an (letzter Eintrag = höchstes Datum, da rezept.entries beim
+  // Speichern immer chronologisch sortiert wird, siehe sortRezeptEntriesByDate()
+  // in modules/homes.js) - ein Klick füllt nur das Textfeld, gespeichert wird
+  // weiterhin erst über den normalen "SchnellDoku speichern"-Button, damit
+  // Datum/Text vorher noch angepasst werden können. Bewusst NICHT wie der
+  // ältere, versteckte "Für heute übernehmen"-Button auf der Patientenseite
+  // (der sofort einen neuen Eintrag anlegt), sondern direkt sichtbar in der
+  // SchnellDoku-Maske selbst.
+  const quickDocRezepteForPreview = sortRezepteForDisplay(patient?.rezepte || []).filter((rezept) => rezept.abgegeben !== true);
+  const lastEntryByRezeptId = {};
+  quickDocRezepteForPreview.forEach((rezept) => {
+    const entries = rezept.entries || [];
+    if (entries.length > 0) {
+      lastEntryByRezeptId[rezept.rezeptId] = entries[entries.length - 1];
+    }
+  });
+
+  function getSelectedQuickDocRezeptId() {
+    if (quickDocRezepteForPreview.length === 1) return quickDocRezepteForPreview[0].rezeptId;
+    const checked = document.querySelector(`.quickDocRezeptCheck[data-patient-id="${patientId}"]:checked`);
+    return checked?.dataset.rezeptId || '';
+  }
+
+  function updateQuickDocLastEntryPreview(rezeptId) {
+    const box = document.getElementById(`quickDocLastEntryBox-${patientId}`);
+    if (!box) return;
+    const lastEntry = rezeptId ? lastEntryByRezeptId[rezeptId] : null;
+    if (!lastEntry) {
+      box.style.display = 'none';
+      return;
+    }
+    document.getElementById(`quickDocLastEntryDate-${patientId}`).textContent = lastEntry.date || '—';
+    document.getElementById(`quickDocLastEntryText-${patientId}`).textContent = lastEntry.text || '—';
+    box.style.display = '';
+  }
+
+  updateQuickDocLastEntryPreview(getSelectedQuickDocRezeptId());
+
+  const useLastBtn = document.getElementById(`quickDocUseLastBtn-${patientId}`);
+  if (useLastBtn) {
+    useLastBtn.onclick = () => {
+      const rezeptId = getSelectedQuickDocRezeptId();
+      const lastEntry = rezeptId ? lastEntryByRezeptId[rezeptId] : null;
+      const textarea = document.getElementById(`quickDocText-${patientId}`);
+      if (!lastEntry || !textarea) return;
+      textarea.value = lastEntry.text || '';
+      textarea.focus();
+    };
+  }
 
   const btn = document.querySelector(`.saveQuickDocBtn[data-patient-id="${patientId}"]`);
   if (!btn) return;
