@@ -1556,33 +1556,116 @@ function collectRezeptFormPayload() {
   };
 }
 
-function renderRezeptPruefungPanel(validation) {
-  if (validation.privat) {
-    return `<p class="pill-green">🔒 Privatrezept — keine Kassenregeln, keine Pflichtfeld-Prüfung nötig.</p>`;
-  }
-  if (validation.ok) {
-    return `<p class="pill-green">✓ Alle Pflichtfelder vollständig · Fristen ok</p>`;
+// Vergleicht die eingegebene(n) ICD-10-Angabe(n) gegen den Heilmittelkatalog
+// (dieselbe Logik wie der separate "Rezeptoptimierer" und FaSti vor der
+// Nachbestellung, siehe checkRezeptOptimierung() in modules/fasti.js) und
+// gibt einen rein informativen Hinweis zurück (kein Pflichtfeld, blockiert
+// das Speichern nicht) - Nutzerwunsch: dieser Abgleich soll nicht erst im
+// separaten Rezeptoptimierer-Werkzeug auffallen, sondern schon live beim
+// Ausfüllen des Rezepts selbst. Auf Nutzerwunsch bewusst sehr kompakt: passt
+// alles, nur ein grüner Haken; passt es nicht, nur ein kleines Warnschild -
+// die Erklärung (inkl. Empfehlung) klappt erst per Klick auf. isOpen wird
+// von außen hereingereicht (siehe bindRezeptPruefungLive()) statt allein auf
+// den nativen <details>-Toggle zu vertrauen: das Panel wird bei JEDER
+// Formularänderung komplett neu gerendert (auch durch ein "change" beim
+// Verlassen eines Feldes, z.B. wenn der Klick auf das Warnschild selbst
+// gerade erst ein anderes Feld unfokussiert) - ohne von außen gehaltenen
+// Zustand würde ein frisches, wieder geschlossenes <details> das gerade
+// geöffnete sofort überschreiben. Bewusst OHNE Navigations-Button zum
+// Rezeptoptimierer, da das die noch ungespeicherten Formulardaten verwerfen
+// würde - stattdessen nur der Hinweis, ihn bei Bedarf manuell zu öffnen.
+function buildHeilmittelKatalogHinweis(payload, isOpen = false) {
+  const icdInputs = [payload.icd10, payload.icd10b].filter((v) => String(v || "").trim());
+  if (icdInputs.length === 0) return "";
+
+  const items = (payload.items || []).filter((item) => item.type);
+  if (items.length === 0) return "";
+
+  const zertifikate = getRuntimeData()?.settings?.zertifikate || {};
+  const ergebnisse = optimiereVerordnung(icdInputs, zertifikate);
+  const beste = ergebnisse.find((e) => !e.unbekannt);
+  if (!beste) return "";
+
+  const empfohlenerTyp = EMPFEHLUNG_ZU_ITEM_TYPE[beste.empfehlung];
+  if (!empfohlenerTyp) return "";
+
+  const aktuelleTypen = items.map((item) => String(item.type || "").trim().toUpperCase());
+  if (aktuelleTypen.includes(empfohlenerTyp.toUpperCase())) {
+    return `<p class="pill-green" style="margin-top:8px;">✓ ICD-10/Heilmittel passen</p>`;
   }
 
+  const heilmittelLabel = VERGUETUNG[beste.empfehlung]?.label || beste.empfehlung;
   return `
-    <div class="error" style="margin-top:12px;">
-      <p class="pill-red" style="display:block; margin-bottom:8px;">✗ Rezeptprüfung: ${validation.errors.length} Punkt(e) offen</p>
-      <ul style="margin:0; padding-left:20px; font-weight:400;">
-        ${validation.errors.map((err) => `<li>${escapeHtml(err.message)}</li>`).join("")}
-      </ul>
-    </div>
+    <details id="katalogHinweisDetails" style="margin-top:8px;" ${isOpen ? "open" : ""}>
+      <summary id="katalogHinweisSummary" class="pill-orange" style="list-style:none; cursor:pointer; display:inline-block;">⚠️ ICD-10/Heilmittel</summary>
+      <p class="muted" style="margin:6px 0 0 0;">ICD-10-Code und Heilmittel passen nicht zusammen (empfohlen: ${escapeHtml(heilmittelLabel)}). Bitte den Rezeptoptimierer nutzen.</p>
+    </details>
   `;
+}
+
+function renderRezeptPruefungPanel(validation, payload = null, katalogHinweisOpen = false) {
+  const parts = [];
+
+  if (validation.privat) {
+    parts.push(`<p class="pill-green">🔒 Privatrezept — keine Kassenregeln, keine Pflichtfeld-Prüfung nötig.</p>`);
+  } else if (validation.ok) {
+    parts.push(`<p class="pill-green">✓ Alle Pflichtfelder vollständig · Fristen ok</p>`);
+  } else {
+    parts.push(`
+      <div class="error" style="margin-top:12px;">
+        <p class="pill-red" style="display:block; margin-bottom:8px;">✗ Rezeptprüfung: ${validation.errors.length} Punkt(e) offen</p>
+        <ul style="margin:0; padding-left:20px; font-weight:400;">
+          ${validation.errors.map((err) => `<li>${escapeHtml(err.message)}</li>`).join("")}
+        </ul>
+      </div>
+    `);
+  }
+
+  // Nutzerwunsch: sichtbare (nicht blockierende) Warnung, sobald Hausbesuch
+  // auf "Nein" steht - diese Praxis arbeitet praktisch ausschließlich per
+  // Hausbesuch, "Nein" ist daher fast immer ein Versehen.
+  if (payload && payload.hausbesuch === "nein") {
+    parts.push(`
+      <div class="card" style="background:#fffbeb; border-color:#f59e0b; margin-top:12px; margin-bottom:0; padding:14px;">
+        <p class="pill-orange" style="display:block; margin-bottom:6px;">⚠️ Hausbesuch: Nein</p>
+        <p style="margin:0;">Diese Praxis arbeitet praktisch ausschließlich per Hausbesuch – bitte prüfen, ob das wirklich so gewollt ist.</p>
+      </div>
+    `);
+  }
+
+  if (payload && !validation.privat) {
+    const katalogHinweis = buildHeilmittelKatalogHinweis(payload, katalogHinweisOpen);
+    if (katalogHinweis) parts.push(katalogHinweis);
+  }
+
+  return parts.join("");
 }
 
 function bindRezeptPruefungLive(panelId) {
   const panel = document.getElementById(panelId);
   if (!panel) return;
 
+  // Merkt sich, ob das Heilmittelkatalog-Warnschild gerade aufgeklappt ist -
+  // das Panel wird bei JEDER Formularänderung komplett neu gerendert (auch
+  // durch das "change", das beim Verlassen eines Feldes feuert - z.B. genau
+  // dann, wenn ein Klick auf das Warnschild selbst gerade ein zuvor
+  // fokussiertes Feld unfokussiert). Ohne diesen von außen gehaltenen
+  // Zustand würde ein dadurch ausgelöster refresh() das native
+  // <details>-Aufklappen im selben Moment wieder zurücksetzen.
+  let katalogHinweisOpen = false;
+
   const refresh = () => {
     const payload = collectRezeptFormPayload();
     const validation = validateRezeptPflichtfelder(payload);
-    panel.innerHTML = renderRezeptPruefungPanel(validation);
+    panel.innerHTML = renderRezeptPruefungPanel(validation, payload, katalogHinweisOpen);
   };
+
+  panel.addEventListener("click", (event) => {
+    if (!event.target.closest("#katalogHinweisSummary")) return;
+    event.preventDefault();
+    katalogHinweisOpen = !katalogHinweisOpen;
+    refresh();
+  });
 
   ["arzt", "ausstell", "bg", "dt", "dringend", "icd10", "icd10b", "leitsymptomatik", "hausbesuch", "arztStempel", "arztUnterschrift", "privat"]
     .forEach((id) => {
@@ -6054,7 +6137,7 @@ export function showRezeptDetailView({ onLock, homeId, patientId, rezeptId, retu
 
     <div class="card">
       <h3>Rezeptprüfung</h3>
-      ${renderRezeptPruefungPanel(pruefung)}
+      ${renderRezeptPruefungPanel(pruefung, rezept)}
     </div>
 
     <details class="accordion">
