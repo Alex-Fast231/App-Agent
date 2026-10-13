@@ -250,6 +250,11 @@ function buildRezeptUnvollstaendigNotices(data) {
 // aktuelle Tag wird bewusst ausgenommen, damit die Doku noch bis Tagesende
 // nachgetragen werden kann, ohne sofort eine Meldung auszulösen.
 function buildDokuFehltNotices(data) {
+  // Settings-Schalter "Doku-Prüfung deaktivieren" (nur per PIN aktivierbar,
+  // siehe showSettingsView in ui/views.js) - wenn gesetzt, soll FaSti
+  // grundsätzlich nicht mehr melden, ob dokumentiert wurde oder nicht.
+  if (data?.settings?.dokuPruefungDeaktiviert) return [];
+
   const notices = [];
   const todayComparable = getComparableFromDate(new Date());
   const fastStartComparable = getFastStartDatumComparable(data?.settings);

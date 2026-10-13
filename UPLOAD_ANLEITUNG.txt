@@ -1,0 +1,71 @@
+FaSt App – Vollständiger App-Stand für ein GitHub-Repo
+================================================================
+Stand: 2026-08-22, siebte Session inkl. vier Nachträgen, Version 3.9.33
+
+Diese ZIP enthält den KOMPLETTEN, lauffähigen und getesteten Stand der
+App (alle Dateien außer dem separaten Viewer), direkt aus der
+getesteten Arbeitsumgebung exportiert.
+
+Der Viewer wird wie gewünscht separat als eigene Datei bereitgestellt
+(FaSt-Viewer.zip) - diese ZIP hier ist ausschließlich die Haupt-App.
+
+WICHTIGSTE Änderung in dieser Version
+----------------------------------------------------------------------
+Unterschriftenblatt: Nach mehreren Fehlversuchen (unterschiedliche
+Wege, das PDF anzuzeigen/zu drucken, die auf Android nicht
+funktionierten oder inhaltlich nicht ausreichten) wurde die Funktion
+auf Ihren Wunsch wieder auf den URSPRÜNGLICHEN, einfachsten Code
+zurückgesetzt: Klick auf "Unterschriften" öffnet die echte PDF-Datei
+direkt in einem neuen Tab/Fenster (window.open), genau wie in der
+allerersten Version der App.
+
+Weitere Änderungen aus dieser Session
+----------------------------------------------------------------------
+- EmailJS komplett entfernt: Der automatische Hintergrundversand des
+  Viewer-Backups per E-Mail gibt es nicht mehr. Stattdessen erscheint
+  beim Öffnen der App eine Backup-Erinnerung (aktuell täglich zum
+  Testen, künftig alle 4 Wochen) mit drei Optionen: Backup
+  herunterladen, per E-Mail senden (öffnet das E-Mail-Programm, Anhang
+  muss manuell hinzugefügt werden), oder später erinnern.
+- Texte in der Backup-Erinnerung gekürzt (keine PIN-Erklärung mehr,
+  E-Mail-Betreff nur noch "Backup <Therapeutenname>", Verlauf zeigt
+  nur noch Datum/Uhrzeit).
+
+So laden Sie ein neues GitHub-Repo hoch
+------------------------------------------
+Option A – über die GitHub-Weboberfläche (am einfachsten):
+1. Auf github.com ein neues, leeres Repository anlegen (KEIN README,
+   .gitignore oder Lizenz beim Anlegen auswählen).
+2. Im neuen Repo auf "uploading an existing file" klicken.
+3. Alle Dateien/Ordner aus dieser ZIP (entpackt) per Drag & Drop
+   hochladen. Achtung: der versteckte Ordner ".githooks" wird von
+   manchen Datei-Explorern nicht angezeigt – ggf. "versteckte Dateien
+   anzeigen" aktivieren (nicht zwingend nötig für den Betrieb der App
+   selbst, nur für die automatische Versionsnummer-Erhöhung bei
+   künftigen lokalen Commits relevant).
+4. Commit direkt im Browser bestätigen.
+
+Option B – über die Kommandozeile (falls git installiert ist):
+    cd <entpackter-ordner-dieser-zip>
+    git init
+    git add -A
+    git commit -m "Initial commit"
+    git branch -M main
+    git remote add origin https://github.com/<IHR-NUTZERNAME>/<REPO-NAME>.git
+    git push -u origin main
+
+Nach dem Hochladen (nur bei Option B relevant, für zukünftige lokale
+Weiterentwicklung mit automatischer Versionserhöhung):
+    git config core.hooksPath .githooks
+
+Wenn Sie stattdessen ein BESTEHENDES Repo aktualisieren möchten:
+einfach alle Dateien aus dieser ZIP über die bestehenden Dateien im
+Repo kopieren/hochladen (überschreiben) und committen. Achtung: die
+Datei "modules/autoExport.js" existiert in dieser Version nicht mehr
+(durch "modules/backupReminder.js" ersetzt) - falls sie in Ihrem
+bestehenden Repo noch vorhanden ist, bitte manuell löschen.
+
+Details siehe HANDOFF_SUMMARY.md, Abschnitt "7e" (aktuellster Stand).
+
+Bei Fragen oder falls nach dem Hochladen etwas nicht funktioniert:
+bitte mit genauer Fehlerbeschreibung/Screenshot zurückmelden.

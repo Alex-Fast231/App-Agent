@@ -673,6 +673,7 @@ export function finalizeAppStructure(data) {
       stundenStartsaldoMinuten: ensureIntegerNumber(settings.stundenStartsaldoMinuten, 0),
       jahresurlaubTage: ensureIntegerNumber(settings.jahresurlaubTage, 0),
       fastiEnabled: ensureBoolean(settings.fastiEnabled, true),
+      dokuPruefungDeaktiviert: ensureBoolean(settings.dokuPruefungDeaktiviert, false),
       zertifikate: {
         kgzns: ensureBoolean(settings.zertifikate?.kgzns, false),
         mt: ensureBoolean(settings.zertifikate?.mt, false),

@@ -6,7 +6,7 @@ export const APP_SCHEMA_VERSION = 3;
 // anfassen nur für einen bewussten Minor-/Major-Sprung. Die Versionsanzeige
 // im Dashboard ist für den Therapeuten die einzige sichtbare Bestätigung,
 // dass ein Update tatsächlich angekommen ist.
-export const APP_VERSION = "3.10.11";
+export const APP_VERSION = "3.10.12";
 export const APP_MODULE = "doku";
 
 export const PRACTICE_ADDRESS = `Physio Strobl
@@ -37,6 +37,7 @@ export function createEmptyAppData() {
       stundenStartsaldoMinuten: 0,
       jahresurlaubTage: 0,
       fastiEnabled: true,
+      dokuPruefungDeaktiviert: false,
       zertifikate: {
         kgzns: false,
         mt: false,
