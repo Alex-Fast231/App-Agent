@@ -1,5 +1,5 @@
 import { createEmptyAppData, APP_VERSION, PRACTICE_ADDRESS, PRACTICE_PHONE } from "../data/schema.js";
-import { setupSecurity, unlockWithPIN } from "../security/auth.js";
+import { setupSecurity, unlockWithPIN, changePIN } from "../security/auth.js";
 import { getRemainingLockoutMs } from "../security/lock.js";
 import {
   getCryptoMeta,
@@ -1990,7 +1990,10 @@ export async function triggerAutomaticBackupDownload(runtimeData) {
     const result = await exportBackup(runtimeData);
     downloadBlob(result.blob, result.filename);
     await markAutoBackupDownloadHandled(`Automatisches Backup "${result.filename}" heruntergeladen.`);
-    showToast(`Automatisches Backup heruntergeladen: ${result.filename}`, 6000);
+    // Bewusst kein showToast() mehr (Nutzerfeedback: die Meldung beim
+    // Öffnen der App wurde als störend empfunden) - der Download selbst
+    // läuft weiterhin ganz normal und unverändert im Hintergrund, nur ohne
+    // sichtbare Benachrichtigung darüber.
   } catch (err) {
     console.error("Automatischer Backup-Download fehlgeschlagen:", err);
   }
@@ -3140,6 +3143,22 @@ export function showSettingsView({ onLock }) {
     </div>
 
     <div class="card">
+      <h3>PIN ändern</h3>
+
+      <label for="settingsCurrentPin">Aktuelle PIN</label>
+      <input id="settingsCurrentPin" type="password" inputmode="numeric" autocomplete="current-password">
+
+      <label for="settingsNewPin">Neue PIN (mindestens 6 Zeichen)</label>
+      <input id="settingsNewPin" type="password" inputmode="numeric" autocomplete="new-password">
+
+      <label for="settingsNewPinRepeat">Neue PIN wiederholen</label>
+      <input id="settingsNewPinRepeat" type="password" inputmode="numeric" autocomplete="new-password">
+
+      <button id="changePinBtn" class="secondary">PIN ändern</button>
+      <div id="changePinMsg"></div>
+    </div>
+
+    <div class="card">
       <h3>App-Version</h3>
       <p class="muted">Aktuelle Version: ${escapeHtml(APP_VERSION)}</p>
       <button id="checkForUpdatesBtn" class="secondary">Aktualisieren</button>
@@ -3191,7 +3210,18 @@ export function showSettingsView({ onLock }) {
     dokuPruefungPinMsg.textContent = "";
   };
 
-  document.getElementById("saveSettingsBtn").onclick = async () => {
+  // Liest+validiert+speichert alle allgemeinen Einstellungsfelder (Name,
+  // Fax, Arbeitstage, Stunden, Jahresurlaub, FaSti, Doku-Prüfung,
+  // Zertifikate, Büro-Mail, Assessment-Intervall). Wird sowohl vom
+  // "Änderungen speichern"-Button als auch vom "PIN ändern"-Button
+  // aufgerufen, damit beim PIN-Wechsel nichts verloren geht, was auf
+  // derselben Seite eingegeben, aber nicht separat über "Änderungen
+  // speichern" gesichert wurde - landet dadurch garantiert mit im nächsten
+  // Backup. Wirft bei einem Validierungsfehler, statt still fehlzuschlagen,
+  // damit der aufrufende Button-Handler die Meldung anzeigen und z.B. die
+  // PIN-Änderung NICHT durchführen kann, wenn die übrigen Angaben ungültig
+  // sind (kein halb gespeicherter Zustand).
+  async function saveGeneralSettings() {
     const therapistName = document.getElementById("settingsTherapistName").value.trim();
     const practiceAddress = PRACTICE_ADDRESS;
     const practicePhone = PRACTICE_PHONE;
@@ -3212,67 +3242,116 @@ export function showSettingsView({ onLock }) {
     };
     const bueroEmail = document.getElementById("settingsBueroEmail").value.trim();
     const assessmentIntervalMonths = Number(document.getElementById("settingsAssessmentInterval").value);
-    const msg = document.getElementById("settingsMessage");
-
-    msg.className = "error";
-    msg.textContent = "";
 
     if (!isValidWeeklyHours(weeklyHours)) {
-      msg.textContent = "Die Arbeitsstunden pro Woche müssen als Zahl eingegeben werden, z. B. 20 oder 38.5.";
-      return;
+      throw new Error("Die Arbeitsstunden pro Woche müssen als Zahl eingegeben werden, z. B. 20 oder 38.5.");
     }
 
     if (fastStartDatumInput && !fastStartDatum) {
-      msg.textContent = "Das Startdatum bei FaSt muss im Format TT.MM.JJJJ eingegeben werden.";
-      return;
+      throw new Error("Das Startdatum bei FaSt muss im Format TT.MM.JJJJ eingegeben werden.");
     }
 
     if (stundenStartsaldoMinuten === null) {
-      msg.textContent = "Der Startsaldo muss im Format +HH:MM oder -HH:MM eingegeben werden, z. B. +40:00.";
-      return;
+      throw new Error("Der Startsaldo muss im Format +HH:MM oder -HH:MM eingegeben werden, z. B. +40:00.");
     }
 
     if (!Number.isFinite(jahresurlaubTage) || jahresurlaubTage < 0) {
-      msg.textContent = "Der Jahresurlaub muss als Zahl (Tage) eingegeben werden, z. B. 30.";
-      return;
+      throw new Error("Der Jahresurlaub muss als Zahl (Tage) eingegeben werden, z. B. 30.");
     }
 
+    mutateRuntimeData((data) => {
+      data.settings.therapistName = therapistName;
+      data.settings.practiceAddress = practiceAddress;
+      data.settings.practicePhone = practicePhone;
+      data.settings.therapistFax = therapistFax;
+      data.settings.workDays = workDays;
+      data.settings.weeklyHours = weeklyHours;
+      data.settings.fastStartDatum = fastStartDatum;
+      data.settings.stundenStartsaldoMinuten = stundenStartsaldoMinuten;
+      data.settings.jahresurlaubTage = jahresurlaubTage;
+      data.settings.fastiEnabled = fastiEnabled;
+      data.settings.dokuPruefungDeaktiviert = dokuPruefungDeaktiviert;
+      data.settings.zertifikate = zertifikate;
+      data.settings.buero = { email: bueroEmail };
+      data.settings.assessmentIntervalMonths = assessmentIntervalMonths;
+      data.settings.updatedAt = new Date().toISOString();
+    });
+
+    await queuePersistRuntimeData();
+
+    // Sofort wirksam machen, ohne dass ein erneutes Ein-/Ausloggen nötig
+    // ist - "aus" blendet Button+Panel sofort aus, "an" baut sie (falls
+    // gerade deaktiviert) mit frisch berechneten Hinweisen wieder auf.
+    if (fastiEnabled) {
+      showFastiNotices(buildFastiNotices(getRuntimeData()));
+    } else {
+      hideFastiWidget();
+    }
+  }
+
+  document.getElementById("saveSettingsBtn").onclick = async () => {
+    const msg = document.getElementById("settingsMessage");
+    msg.className = "error";
+    msg.textContent = "";
+
     try {
-      mutateRuntimeData((data) => {
-        data.settings.therapistName = therapistName;
-        data.settings.practiceAddress = practiceAddress;
-        data.settings.practicePhone = practicePhone;
-        data.settings.therapistFax = therapistFax;
-        data.settings.workDays = workDays;
-        data.settings.weeklyHours = weeklyHours;
-        data.settings.fastStartDatum = fastStartDatum;
-        data.settings.stundenStartsaldoMinuten = stundenStartsaldoMinuten;
-        data.settings.jahresurlaubTage = jahresurlaubTage;
-        data.settings.fastiEnabled = fastiEnabled;
-        data.settings.dokuPruefungDeaktiviert = dokuPruefungDeaktiviert;
-        data.settings.zertifikate = zertifikate;
-        data.settings.buero = { email: bueroEmail };
-        data.settings.assessmentIntervalMonths = assessmentIntervalMonths;
-        data.settings.updatedAt = new Date().toISOString();
-      });
-
-      await queuePersistRuntimeData();
-
-      // Sofort wirksam machen, ohne dass ein erneutes Ein-/Ausloggen nötig
-      // ist - "aus" blendet Button+Panel sofort aus, "an" baut sie (falls
-      // gerade deaktiviert) mit frisch berechneten Hinweisen wieder auf.
-      if (fastiEnabled) {
-        showFastiNotices(buildFastiNotices(getRuntimeData()));
-      } else {
-        hideFastiWidget();
-      }
-
+      await saveGeneralSettings();
       msg.className = "success";
       msg.textContent = "Einstellungen gespeichert.";
     } catch (err) {
       console.error(err);
       msg.className = "error";
       msg.textContent = err?.message || "Einstellungen konnten nicht gespeichert werden.";
+    }
+  };
+
+  document.getElementById("changePinBtn").onclick = async () => {
+    const currentPin = document.getElementById("settingsCurrentPin").value;
+    const newPin = document.getElementById("settingsNewPin").value;
+    const newPinRepeat = document.getElementById("settingsNewPinRepeat").value;
+    const msg = document.getElementById("changePinMsg");
+
+    msg.className = "error";
+    msg.textContent = "";
+
+    if (!currentPin) {
+      msg.textContent = "Bitte die aktuelle PIN eingeben.";
+      return;
+    }
+
+    if (!newPin || newPin.length < 6) {
+      msg.textContent = "Die neue PIN muss mindestens 6 Zeichen haben.";
+      return;
+    }
+
+    if (newPin !== newPinRepeat) {
+      msg.textContent = "Die PIN stimmt nicht überein.";
+      return;
+    }
+
+    try {
+      // Erst die übrigen Einstellungen auf dieser Seite sichern (Name,
+      // Stunden, ...), damit beim PIN-Wechsel nichts verloren geht, was
+      // zwar eingegeben, aber noch nicht über "Änderungen speichern"
+      // gesichert wurde.
+      await saveGeneralSettings();
+
+      const updatedCryptoMeta = await changePIN({
+        currentPin,
+        newPin,
+        cryptoMeta: getCryptoMeta()
+      });
+      setCryptoMeta(updatedCryptoMeta);
+
+      document.getElementById("settingsCurrentPin").value = "";
+      document.getElementById("settingsNewPin").value = "";
+      document.getElementById("settingsNewPinRepeat").value = "";
+      msg.className = "success";
+      msg.textContent = "PIN geändert und Einstellungen gespeichert.";
+    } catch (err) {
+      console.error(err);
+      msg.className = "error";
+      msg.textContent = err?.message || "PIN konnte nicht geändert werden.";
     }
   };
 

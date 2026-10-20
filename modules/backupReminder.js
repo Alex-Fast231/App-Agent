@@ -27,9 +27,9 @@ import { mutateRuntimeData, queuePersistRuntimeData } from "../core/app-core.js"
 //    siehe showBackupReminderModal() in ui/views.js) bleibt zusätzlich
 //    bestehen, aber jetzt als reine "Bitte an die Praxis/den Viewer-PC
 //    senden"-Erinnerung, damit der separate Offline-Viewer regelmäßig auf
-//    den aktuellen Stand gebracht wird - Vorgabe des Nutzers: wöchentlich.
+//    den aktuellen Stand gebracht wird - Vorgabe des Nutzers: alle 14 Tage.
 const BACKUP_AUTO_DOWNLOAD_INTERVAL_DAYS = 5;
-const BACKUP_REMINDER_INTERVAL_DAYS = 7;
+const BACKUP_REMINDER_INTERVAL_DAYS = 14;
 
 // Fallback-Zieladresse für den mailto-Link, falls in den Einstellungen noch
 // keine Büro-Mail hinterlegt ist. Der Therapeut kann die Zieladresse im
@@ -65,7 +65,7 @@ export function isBackupReminderDue(data) {
 
 // Eigener, unabhängiger Zeitstempel (lastAutoBackupDownloadAt) für den
 // stillen automatischen Download - bewusst getrennt von lastAutoExportAt
-// (das weiterhin nur die wöchentliche "Bitte senden"-Erinnerung steuert),
+// (das weiterhin nur die 14-tägliche "Bitte senden"-Erinnerung steuert),
 // damit beide Rhythmen sich nicht gegenseitig zurücksetzen.
 //
 // Zwei Auslöser, das erste hat Vorrang:
@@ -205,7 +205,7 @@ export async function markBackupReminderPostponed() {
 
 // Wird nach jedem erfolgreichen stillen Auto-Download aufgerufen - eigener
 // Zeitstempel (siehe isAutoBackupDownloadDue()), damit dieser Rhythmus
-// unabhängig von der wöchentlichen "Bitte senden"-Erinnerung läuft.
+// unabhängig von der 14-tägigen "Bitte senden"-Erinnerung läuft.
 export async function markAutoBackupDownloadHandled(message) {
   // silent: true ist hier zwingend nötig, nicht nur Kosmetik - ohne diese
   // Option würde dieser Aufruf selbst den zentralen Änderungszeitstempel

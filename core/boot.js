@@ -167,7 +167,7 @@ function initiateFasti() {
 // damit auch ohne jedes Zutun regelmäßig eine Sicherung außerhalb des von
 // Browser-Eviction betroffenen App-Speichers existiert (Vorgabe des
 // Nutzers, u.a. wegen der auf Betriebshandys unkritischen ZIP-Ansammlung);
-// (2) die bestehende, klickbasierte "Bitte senden"-Erinnerung alle 7 Tage,
+// (2) die bestehende, klickbasierte "Bitte senden"-Erinnerung alle 14 Tage,
 // damit der separate Offline-Viewer regelmäßig aktualisiert wird. Beide
 // können am selben Tag unabhängig voneinander fällig sein.
 function maybeRunBackupRoutines() {
