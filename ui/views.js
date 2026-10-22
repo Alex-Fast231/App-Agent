@@ -3957,6 +3957,30 @@ export function showPatientenListeView({ onLock, searchText = "" } = {}) {
     </div>
 
     <div class="card">
+      <details class="accordion">
+        <summary>
+          <span>Ausgeschieden / Verstorben</span>
+          <span class="muted">${inactivePatients.length} Patient(en)</span>
+        </summary>
+        <div class="accordion-body">
+          ${inactivePatients.length === 0 ? `<p class="muted">Keine ausgeschiedenen oder verstorbenen Patienten vorhanden.</p>` : `
+            <div class="list-stack">
+              ${inactivePatients.map(({ patient, homeName }) => `
+                <div class="compact-card">
+                  <div style="font-weight:600;">
+                    ${escapeHtml(formatPatientName(patient) || "Ohne Namen")}
+                    ${patient.verstorben ? `<span class="pill-red">Verstorben</span>` : `<span class="pill-gray">Ausgeschieden</span>`}
+                  </div>
+                  <div class="compact-meta">${escapeHtml(homeName)}${patient.birthDate ? ` · geb. ${escapeHtml(patient.birthDate)}` : ""}</div>
+                </div>
+              `).join("")}
+            </div>
+          `}
+        </div>
+      </details>
+    </div>
+
+    <div class="card">
       <label for="patientenListeSearch">Suche nach Name, Geburtsdatum oder Einrichtung</label>
       <input id="patientenListeSearch" type="text" value="${escapeHtml(searchText)}" placeholder="z.B. Müller oder Heim Sonnenschein">
       <div class="row">
@@ -3982,30 +4006,6 @@ export function showPatientenListeView({ onLock, searchText = "" } = {}) {
           </div>
         `).join("")}
       </div>
-    </div>
-
-    <div class="card">
-      <details class="accordion">
-        <summary>
-          <span>Ausgeschieden / Verstorben</span>
-          <span class="muted">${inactivePatients.length} Patient(en)</span>
-        </summary>
-        <div class="accordion-body">
-          ${inactivePatients.length === 0 ? `<p class="muted">Keine ausgeschiedenen oder verstorbenen Patienten vorhanden.</p>` : `
-            <div class="list-stack">
-              ${inactivePatients.map(({ patient, homeName }) => `
-                <div class="compact-card">
-                  <div style="font-weight:600;">
-                    ${escapeHtml(formatPatientName(patient) || "Ohne Namen")}
-                    ${patient.verstorben ? `<span class="pill-red">Verstorben</span>` : `<span class="pill-gray">Ausgeschieden</span>`}
-                  </div>
-                  <div class="compact-meta">${escapeHtml(homeName)}${patient.birthDate ? ` · geb. ${escapeHtml(patient.birthDate)}` : ""}</div>
-                </div>
-              `).join("")}
-            </div>
-          `}
-        </div>
-      </details>
     </div>
   `);
 
