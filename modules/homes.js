@@ -1133,7 +1133,16 @@ export function deletePatient(homeId, patientId) {
   });
 }
 
+// Jedes Feld fällt auf einen leeren/falschen Default zurück, wenn payload
+// es nicht enthält - ein Aufruf mit payload={} legt deshalb bewusst ein
+// vollständig leeres "Platzhalter-Rezept" an (siehe "Zeit/Doku ohne
+// Rezept-Angaben" in ui/views.js: Zeiterfassung/SchnellDoku, die ein
+// Rezept technisch brauchen, aber dem Therapeuten erlauben sollen, die
+// eigentlichen Rezeptangaben erst später nachzutragen). Gibt die neue
+// rezeptId zurück, damit Aufrufer direkt mit diesem Rezept weiterarbeiten
+// können, ohne den Datenstand erneut danach durchsuchen zu müssen.
 export function createRezept(homeId, patientId, payload) {
+  const rezeptId = generateId("rezept");
   mutateRuntimeData((data) => {
     const home = getHomeById(data, homeId);
     if (!home) throw new Error("Heim nicht gefunden");
@@ -1150,7 +1159,7 @@ export function createRezept(homeId, patientId, payload) {
       .filter((item) => item.type);
 
     patient.rezepte.push({
-      rezeptId: generateId("rezept"),
+      rezeptId,
       arzt: (payload.arzt || "").trim(),
       ausstell: (payload.ausstell || "").trim(),
       bg: !!payload.bg,
@@ -1180,6 +1189,7 @@ export function createRezept(homeId, patientId, payload) {
       doctorReports: []
     });
   });
+  return rezeptId;
 }
 
 export function updateRezept(homeId, patientId, rezeptId, payload) {

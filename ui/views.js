@@ -140,6 +140,18 @@ function isPatientDeceased(patient) {
   return !!patient?.verstorben;
 }
 
+// Verstorbene UND ausgeschiedene Patienten gelten beide als "nicht mehr
+// aktiv" (siehe patient.ausgeschieden) - genutzt, um beide Gruppen aus
+// patientenübergreifenden AKTIVITÄTS-Übersichten (Zeiterfassung,
+// Dashboard-Doku-Liste, Patientenliste, Arztübersicht) herauszuhalten, wo
+// sie sonst neben echten Behandlungsfällen auftauchen, ohne dort etwas zu
+// tun zu haben. Bewusst NICHT in der Einrichtung->Patient-Stammdaten-Ansicht
+// verwendet - dort müssen ausgeschiedene Patienten weiterhin auffindbar
+// bleiben, u.a. um sie bei Bedarf wieder zu reaktivieren.
+function isPatientInactive(patient) {
+  return isPatientDeceased(patient) || !!patient?.ausgeschieden;
+}
+
 function hatAktivesRezept(patient) {
   return (patient.rezepte || []).some((r) => r.abgegeben !== true);
 }
@@ -3894,12 +3906,18 @@ export function showHomesView({ onLock, searchText = "" }) {
 }
 
 // Sammelt alle Patienten über alle Einrichtungen hinweg für die
-// alphabetische Patienten-Gesamtliste (Dashboard-Button "Patienten").
-function collectAllPatients(data) {
+// alphabetische Patienten-Gesamtliste (Dashboard-Button "Patienten") und
+// weitere patientenübergreifende Übersichten (Doku-Liste, Arztübersicht).
+// includeInactive:true liefert AUSSCHLIESSLICH für den separaten
+// "Ausgeschieden/Verstorben"-Bereich in showPatientenListeView() auch
+// ausgeschiedene/verstorbene Patienten zurück - der normale (default)
+// Aufruf blendet beide Gruppen weiterhin aus, damit sie nicht neben aktiven
+// Fällen in Aktivitäts-Übersichten auftauchen.
+function collectAllPatients(data, { includeInactive = false } = {}) {
   const results = [];
   (data?.homes || []).forEach((home) => {
     (home?.patients || []).forEach((patient) => {
-      if (isPatientDeceased(patient)) return;
+      if (!includeInactive && isPatientInactive(patient)) return;
       results.push({ patient, homeId: home?.homeId || "", homeName: home?.name || "Ohne Name" });
     });
   });
@@ -3921,6 +3939,15 @@ export function showPatientenListeView({ onLock, searchText = "" } = {}) {
     const haystack = [patient.firstName, patient.lastName, patient.birthDate, homeName].join(" ").toLowerCase();
     return haystack.includes(q);
   });
+
+  // Eigener, eingeklappter Bereich für ausgeschiedene/verstorbene Patienten
+  // (Nutzerwunsch): die tauchten bisher nirgendwo gesammelt auf, sondern nur
+  // vereinzelt (mit Pille) in der jeweiligen Einrichtung - hier jetzt
+  // zusätzlich patientenübergreifend auffindbar, aber bewusst getrennt von
+  // der aktiven Liste oben, damit sie dort (und in Zeiterfassung/Doku) nicht
+  // mehr neben echten Behandlungsfällen auftauchen.
+  const inactivePatients = collectAllPatients(runtimeData, { includeInactive: true })
+    .filter(({ patient }) => isPatientInactive(patient));
 
   render(`
     <div class="card">
@@ -3955,6 +3982,30 @@ export function showPatientenListeView({ onLock, searchText = "" } = {}) {
           </div>
         `).join("")}
       </div>
+    </div>
+
+    <div class="card">
+      <details class="accordion">
+        <summary>
+          <span>Ausgeschieden / Verstorben</span>
+          <span class="muted">${inactivePatients.length} Patient(en)</span>
+        </summary>
+        <div class="accordion-body">
+          ${inactivePatients.length === 0 ? `<p class="muted">Keine ausgeschiedenen oder verstorbenen Patienten vorhanden.</p>` : `
+            <div class="list-stack">
+              ${inactivePatients.map(({ patient, homeName }) => `
+                <div class="compact-card">
+                  <div style="font-weight:600;">
+                    ${escapeHtml(formatPatientName(patient) || "Ohne Namen")}
+                    ${patient.verstorben ? `<span class="pill-red">Verstorben</span>` : `<span class="pill-gray">Ausgeschieden</span>`}
+                  </div>
+                  <div class="compact-meta">${escapeHtml(homeName)}${patient.birthDate ? ` · geb. ${escapeHtml(patient.birthDate)}` : ""}</div>
+                </div>
+              `).join("")}
+            </div>
+          `}
+        </div>
+      </details>
     </div>
   `);
 
@@ -4007,7 +4058,11 @@ function renderQuickDocFields(patient, prefillDate = "", prefillRezeptId = "") {
       <label for="quickDocDate-${patient.patientId}">Behandlungsdatum</label>
       <input id="quickDocDate-${patient.patientId}" class="quickDocDateInput" type="text" value="${escapeHtml(prefillDate || formatCurrentDateShort())}" placeholder="TT.MM.JJJJ" inputmode="numeric">
     </div>
-    ${quickDocRezepte.length === 0 ? `<p class="muted">Keine Rezepte für SchnellDoku vorhanden.</p>` : quickDocRezepte.length === 1 ? `
+    ${quickDocRezepte.length === 0 ? `
+      <p class="muted">Keine Rezepte für SchnellDoku vorhanden.</p>
+      <p class="muted">Falls das Rezept noch nicht eingetippt wurde (z.B. aus Zeitgründen), kann trotzdem schon dokumentiert werden - die Rezeptangaben lassen sich später über Einrichtung → Patient → Rezept nachtragen.</p>
+      <button type="button" class="quickDocOhneRezeptBtn secondary" data-patient-id="${patient.patientId}">Ohne Rezept-Angaben dokumentieren</button>
+    ` : quickDocRezepte.length === 1 ? `
       <div class="compact-card" style="margin-bottom:10px;">
         <div style="font-weight:600; margin-bottom:6px;">Zielrezept vom: ${escapeHtml(quickDocRezepte[0].ausstell || "—")}</div>
         <div class="compact-meta">${escapeHtml(rezeptSummary(quickDocRezepte[0]))}</div>
@@ -4046,7 +4101,7 @@ function renderQuickDocFields(patient, prefillDate = "", prefillRezeptId = "") {
   `;
 }
 
-function bindQuickDocHandlers({ homeId, patient, onSaved }) {
+function bindQuickDocHandlers({ homeId, patient, onSaved, onRezeptCreated }) {
   const patientId = patient.patientId;
 
   const dateInputEl = document.getElementById(`quickDocDate-${patientId}`);
@@ -4146,6 +4201,26 @@ function bindQuickDocHandlers({ homeId, patient, onSaved }) {
       if (!lastEntry || !textarea) return;
       textarea.value = lastEntry.text || '';
       textarea.focus();
+    };
+  }
+
+  // "Ohne Rezept-Angaben dokumentieren" (Nutzerwunsch): legt ein leeres
+  // Platzhalter-Rezept an (createRezept() mit payload={}, siehe Kommentar
+  // dort), damit direkt dokumentiert werden kann, auch wenn das Rezept aus
+  // Zeitgründen noch nicht eingetippt wurde - die eigentlichen Angaben
+  // (ICD-10, Arzt, Leitsymptomatik, Heilmittel) lassen sich jederzeit
+  // später über Einrichtung → Patient → Rezept ergänzen; FaSti erinnert
+  // daran über die bereits bestehende "Rezept unvollständig"-Meldung.
+  const ohneRezeptBtn = document.querySelector(`.quickDocOhneRezeptBtn[data-patient-id="${patientId}"]`);
+  if (ohneRezeptBtn) {
+    ohneRezeptBtn.onclick = async () => {
+      try {
+        createRezept(homeId, patientId, {});
+        await queuePersistRuntimeData();
+        (onRezeptCreated || onSaved)();
+      } catch (err) {
+        console.error(err);
+      }
     };
   }
 
@@ -4303,6 +4378,10 @@ export function showDokuSchreibenView({ onLock, homeId, patientId, searchText = 
     patient,
     onSaved: () => {
       showToast("Dokumentation gespeichert");
+      showDokuSchreibenView({ onLock, homeId, patientId, searchText });
+    },
+    onRezeptCreated: () => {
+      showToast("Rezept angelegt - Angaben können später ergänzt werden");
       showDokuSchreibenView({ onLock, homeId, patientId, searchText });
     }
   });
@@ -4511,7 +4590,11 @@ export function showHomeDetailView({ onLock, homeId, searchText = "" }) {
     bindQuickDocHandlers({
       homeId,
       patient,
-      onSaved: () => showHomeDetailView({ onLock, homeId, searchText })
+      onSaved: () => showHomeDetailView({ onLock, homeId, searchText }),
+      onRezeptCreated: () => {
+        showToast("Rezept angelegt - Angaben können später ergänzt werden");
+        showHomeDetailView({ onLock, homeId, searchText });
+      }
     });
   });
 
@@ -8966,7 +9049,7 @@ export function showZeiterfassungView({ onLock, selectedHomeId = null, selectedP
           ${homes.length === 0
             ? `<p class="muted">Keine Einrichtungen vorhanden.</p>`
             : homes.map(home => {
-                const aktivePatients = (home.patients || []).filter(p => !isPatientDeceased(p) && (!nurAktive || hatAktivesRezept(p)));
+                const aktivePatients = (home.patients || []).filter(p => !isPatientInactive(p) && (!nurAktive || hatAktivesRezept(p)));
                 return `
                   <div class="compact-card selectable-card zeit-home-btn" data-home-id="${escapeHtml(home.homeId || '')}">
                     <div style="font-weight:700; font-size:16px;">${escapeHtml(home.name || '—')}</div>
@@ -9003,7 +9086,7 @@ export function showZeiterfassungView({ onLock, selectedHomeId = null, selectedP
   if (!home) return showZeiterfassungView({ onLock });
 
   const aktivePatients = sortPatientsAlpha(
-    (home.patients || []).filter(p => !isPatientDeceased(p) && (!nurAktive || hatAktivesRezept(p)))
+    (home.patients || []).filter(p => !isPatientInactive(p) && (!nurAktive || hatAktivesRezept(p)))
   );
 
   if (!selectedPatientId) {
@@ -9071,11 +9154,22 @@ export function showZeiterfassungView({ onLock, selectedHomeId = null, selectedP
           <div style="font-weight:700; margin-bottom:4px;">${escapeHtml(patientName)}</div>
           <div class="compact-meta" style="margin-bottom:12px;">${escapeHtml(home.name || '—')}</div>
           <p class="muted">Keine aktiven Rezepte vorhanden.</p>
+          <p class="muted">Falls das Rezept noch nicht eingetippt wurde (z.B. aus Zeitgründen), kann die Zeit trotzdem schon erfasst werden - die Rezeptangaben lassen sich später über Einrichtung → Patient → Rezept nachtragen.</p>
+          <button id="zeitOhneRezeptBtn" class="secondary">Zeit ohne Rezept-Angaben buchen</button>
           <div class="row" style="margin-top:16px;">
             <button id="zeitBackPatientBtn" class="secondary">Zurück</button>
           </div>
         </div>
       `);
+      document.getElementById("zeitOhneRezeptBtn").onclick = async () => {
+        // Platzhalter-Rezept (siehe createRezept() in modules/homes.js) -
+        // die Zeit braucht technisch ein Rezept, zum Buchen selbst müssen
+        // aber keine Rezeptangaben vorliegen; FaSti erinnert über die
+        // bestehende "Rezept unvollständig"-Meldung ans Nachtragen.
+        const neuRezeptId = createRezept(selectedHomeId, selectedPatientId, {});
+        await queuePersistRuntimeData();
+        showZeiterfassungView({ onLock, selectedHomeId, selectedPatientId, selectedRezeptId: neuRezeptId, scrollTo });
+      };
       document.getElementById("zeitBackPatientBtn").onclick = () => {
         setCurrentView("zeiterfassung", { selectedHomeId, selectedPatientId: null, selectedRezeptId: null });
         showZeiterfassungView({ onLock, selectedHomeId, scrollTo });
