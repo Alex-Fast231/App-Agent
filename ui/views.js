@@ -1,4 +1,5 @@
 import { createEmptyAppData, APP_VERSION, PRACTICE_ADDRESS, PRACTICE_PHONE } from "../data/schema.js";
+import { HILFE_KAPITEL } from "../data/hilfe-inhalt.js";
 import { setupSecurity, unlockWithPIN, changePIN } from "../security/auth.js";
 import { getRemainingLockoutMs } from "../security/lock.js";
 import {
@@ -3571,9 +3572,7 @@ export function showDashboardView({ onLock, keepOverviewOpen = false } = {}) {
   document.getElementById("openUnterschriftenblattBtn").onclick = () => {
     window.open("./vorlagen/unterschriftenblatt.pdf", "_blank");
   };
-  document.getElementById("openSupportBtn").onclick = () => {
-    window.open("https://physiofast.wixsite.com/fast-support", "_blank");
-  };
+  document.getElementById("openSupportBtn").onclick = () => showSupportView({ onLock });
   document.getElementById("openAbwesenheitBtn").onclick = () => showAbwesenheitView({ onLock });
   document.getElementById("openFreikuvertBtn").onclick = () => showFreikuvertView({ onLock });
   document.getElementById("openAssessmentEinstiegBtn").onclick = () => showAssessmentEinrichtungAuswahlView({ onLock });
@@ -6662,7 +6661,8 @@ function renderAbgabeSheetHtml(rows, options = {}) {
     </div>
     ${normalizedRows.map((row) => {
       // Rahmen-Hervorhebung nur im PDF/Ausdruck, nicht in der App-Ansicht:
-      // Befreit (orange) hat Vorrang vor Doppeltermin (blau).
+      // ausschließlich Befreit (orange) - die frühere blaue
+      // Doppeltermin-Hervorhebung wurde auf Nutzerwunsch entfernt.
       const highlightStyle = row.befreit
         ? "border:2px solid #c2410c; border-radius:8px; padding:8px 10px;"
         : "";
@@ -8422,6 +8422,246 @@ export function showFaqView({ onLock }) {
     `;
   };
 
+}
+
+// ─────────────────────────────────────────────
+// SUPPORT-SEITE (Leitfaden, siehe data/hilfe-inhalt.js)
+// ─────────────────────────────────────────────
+
+// ä/ae, ö/oe, ü/ue, ß/ss werden auf dieselbe Schreibweise gebracht, damit
+// z.B. "ueberstunden" (ohne Umlaut eingetippt) dieselben Treffer liefert
+// wie "überstunden" - wird auf Such-Eingabe UND auf den durchsuchten Text
+// gleichermaßen angewendet, siehe buildSupportSearchIndex().
+function normalizeSupportSearchText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replaceAll("ä", "ae")
+    .replaceAll("ö", "oe")
+    .replaceAll("ü", "ue")
+    .replaceAll("ß", "ss");
+}
+
+function stripHilfeBold(value) {
+  return String(value || "").replaceAll("**", "");
+}
+
+function hilfeBlockPlainText(block) {
+  if (block.typ === "text" || block.typ === "ueberschrift") return stripHilfeBold(block.text);
+  if (block.typ === "liste" || block.typ === "schritte") return block.items.map(stripHilfeBold).join(" ");
+  if (block.typ === "tabelle") {
+    return [...block.kopf, ...block.zeilen.flat()].map(stripHilfeBold).join(" ");
+  }
+  return "";
+}
+
+// Baut aus den **…**-Markierungen in hilfe-inhalt.js <strong>-Tags, nachdem
+// der Text bereits escaped (und ggf. mit <mark> markiert) wurde - die
+// **-Zeichen selbst sind für escapeHtml() unsichtbar, deshalb ist diese
+// Reihenfolge unproblematisch.
+function boldifyHilfeText(escapedHtml) {
+  return escapedHtml.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+}
+
+function highlightHilfeMatches(escapedHtml, rawQuery) {
+  const query = (rawQuery || "").trim();
+  if (!query) return escapedHtml;
+  const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (!escapedQuery) return escapedHtml;
+  return escapedHtml.replace(new RegExp(`(${escapedQuery})`, "gi"), `<mark style="background:#fde68a; color:inherit; padding:0 2px; border-radius:2px;">$1</mark>`);
+}
+
+function renderHilfeInlineText(rawText, query) {
+  return boldifyHilfeText(highlightHilfeMatches(escapeHtml(rawText), query));
+}
+
+function renderHilfeBloecke(bloecke, query) {
+  return bloecke.map((block) => {
+    if (block.typ === "text") {
+      return `<p style="margin:10px 0;">${renderHilfeInlineText(block.text, query)}</p>`;
+    }
+    if (block.typ === "ueberschrift") {
+      return `<h4 style="margin:18px 0 8px;">${renderHilfeInlineText(block.text, query)}</h4>`;
+    }
+    if (block.typ === "liste") {
+      return `<ul style="margin:10px 0; padding-left:20px; line-height:1.7;">${block.items.map((item) => `<li>${renderHilfeInlineText(item, query)}</li>`).join("")}</ul>`;
+    }
+    if (block.typ === "schritte") {
+      return `<ol style="margin:10px 0; padding-left:20px; line-height:1.7;">${block.items.map((item) => `<li>${renderHilfeInlineText(item, query)}</li>`).join("")}</ol>`;
+    }
+    if (block.typ === "tabelle") {
+      const kopf = `<tr style="border-bottom:1px solid var(--border);">${block.kopf.map((h) => `<th style="text-align:left; padding:6px 4px;">${renderHilfeInlineText(h, query)}</th>`).join("")}</tr>`;
+      const zeilen = block.zeilen.map((row) => `<tr style="border-bottom:1px solid var(--border);">${row.map((cell) => `<td style="padding:6px 4px;">${renderHilfeInlineText(cell, query)}</td>`).join("")}</tr>`).join("");
+      return `<table style="width:100%; border-collapse:collapse; font-size:14px; margin:10px 0;">${kopf}${zeilen}</table>`;
+    }
+    return "";
+  }).join("");
+}
+
+// Flacher Such-Index über alle Abschnitte aller Kapitel, einmal beim Laden
+// des Moduls aus HILFE_KAPITEL (data/hilfe-inhalt.js) aufgebaut. Ändert
+// jemand dort Text oder Stichwörter, übernimmt die Support-Seite das beim
+// nächsten Laden automatisch - an dieser Stelle muss nichts angepasst
+// werden.
+const HILFE_SUCH_INDEX = HILFE_KAPITEL.flatMap((kapitel) =>
+  kapitel.abschnitte.map((abschnitt) => {
+    const plainText = abschnitt.bloecke.map(hilfeBlockPlainText).join(" ");
+    const haystack = normalizeSupportSearchText([
+      abschnitt.titel,
+      kapitel.titel,
+      plainText,
+      ...(abschnitt.stichwoerter || [])
+    ].join(" "));
+    return {
+      kapitelNummer: kapitel.nummer,
+      kapitelTitel: kapitel.titel,
+      anker: abschnitt.anker,
+      titel: abschnitt.titel,
+      plainText,
+      haystack
+    };
+  })
+);
+
+function buildHilfeExcerpt(plainText, rawQuery) {
+  const query = (rawQuery || "").trim();
+  const maxLen = 140;
+  let idx = -1;
+  if (query) {
+    idx = plainText.toLowerCase().indexOf(query.toLowerCase());
+  }
+  if (idx < 0) {
+    return plainText.length > maxLen ? `${plainText.slice(0, maxLen).trim()}…` : plainText;
+  }
+  const start = Math.max(0, idx - 40);
+  const end = Math.min(plainText.length, idx + query.length + 80);
+  const prefix = start > 0 ? "…" : "";
+  const suffix = end < plainText.length ? "…" : "";
+  return `${prefix}${plainText.slice(start, end).trim()}${suffix}`;
+}
+
+function renderSupportTocHtml() {
+  return `
+    <div class="list-stack">
+      ${HILFE_KAPITEL.map((kapitel) => `
+        <div class="compact-card supportTocItem" data-kapitel="${escapeHtml(kapitel.nummer)}" style="cursor:pointer; display:flex; justify-content:space-between; align-items:center; gap:10px;">
+          <div style="font-weight:600;">${escapeHtml(kapitel.nummer)}. ${escapeHtml(kapitel.titel)}</div>
+          <div class="muted">›</div>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderSupportResultsHtml(rawQuery) {
+  const query = normalizeSupportSearchText(rawQuery);
+  const treffer = HILFE_SUCH_INDEX.filter((item) => item.haystack.includes(query));
+
+  if (treffer.length === 0) {
+    return `<p class="muted">Nichts gefunden. Versuch ein anderes Wort oder schau ins Inhaltsverzeichnis.</p>`;
+  }
+
+  return `
+    <div class="list-stack">
+      ${treffer.map((item) => `
+        <div class="compact-card supportResultItem" data-anker="${escapeHtml(item.anker)}" style="cursor:pointer;">
+          <div style="font-weight:700;">${escapeHtml(item.kapitelNummer)}. ${renderHilfeInlineText(item.titel, rawQuery)}</div>
+          <div class="compact-meta" style="margin-top:4px;">${renderHilfeInlineText(buildHilfeExcerpt(item.plainText, rawQuery), rawQuery)}</div>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderSupportKapitelHtml(query) {
+  return HILFE_KAPITEL.map((kapitel) => `
+    <details class="accordion" id="hilfeKapitel-${escapeHtml(kapitel.nummer)}">
+      <summary>
+        <span>${escapeHtml(kapitel.nummer)}. ${escapeHtml(kapitel.titel)}</span>
+      </summary>
+      <div class="accordion-body">
+        ${kapitel.abschnitte.map((abschnitt) => {
+          const zeigeEigeneUeberschrift = !(abschnitt.anker === kapitel.nummer && abschnitt.titel === kapitel.titel);
+          return `
+            <div id="abschnitt-${escapeHtml(abschnitt.anker)}">
+              ${zeigeEigeneUeberschrift ? `<h3 style="margin:20px 0 8px;">${renderHilfeInlineText(abschnitt.titel, query)}</h3>` : ""}
+              ${renderHilfeBloecke(abschnitt.bloecke, query)}
+            </div>
+          `;
+        }).join("")}
+      </div>
+    </details>
+  `).join("");
+}
+
+export function showSupportView({ onLock } = {}) {
+  bindLockButton(onLock);
+  setCurrentView("support");
+
+  render(`
+    <div class="card">
+      <h2>Support</h2>
+      <p class="muted">Leitfaden zur App, zum Nachschlagen – auch offline.</p>
+      <button id="backDashboardBtn" class="secondary">Zurück zum Dashboard</button>
+    </div>
+
+    <div class="card">
+      <label for="supportSearchInput">Suche</label>
+      <input id="supportSearchInput" type="text" placeholder="z. B. Frist, PIN, Kuvert …" autocomplete="off">
+    </div>
+
+    <div id="supportTocResultContainer"></div>
+
+    <div id="supportKapitelContainer"></div>
+  `);
+
+  document.getElementById("backDashboardBtn").onclick = () => showDashboardView({ onLock });
+
+  const tocResultContainer = document.getElementById("supportTocResultContainer");
+  const kapitelContainer = document.getElementById("supportKapitelContainer");
+  const searchInput = document.getElementById("supportSearchInput");
+
+  function openSupportKapitel(nummer) {
+    const details = document.getElementById(`hilfeKapitel-${nummer}`);
+    if (!details) return;
+    details.open = true;
+    details.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function openSupportAbschnitt(anker) {
+    const eintrag = HILFE_SUCH_INDEX.find((item) => item.anker === anker);
+    if (!eintrag) return;
+    const details = document.getElementById(`hilfeKapitel-${eintrag.kapitelNummer}`);
+    if (details) details.open = true;
+    const target = document.getElementById(`abschnitt-${anker}`);
+    if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function refreshSupportView(query) {
+    tocResultContainer.innerHTML = query.trim() ? renderSupportResultsHtml(query) : renderSupportTocHtml();
+
+    const offeneKapitel = Array.from(kapitelContainer.querySelectorAll("details[open]")).map((d) => d.id);
+    kapitelContainer.innerHTML = renderSupportKapitelHtml(query);
+    offeneKapitel.forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.open = true;
+    });
+  }
+
+  refreshSupportView("");
+
+  searchInput.oninput = () => refreshSupportView(searchInput.value);
+
+  tocResultContainer.addEventListener("click", (e) => {
+    const tocItem = e.target.closest(".supportTocItem");
+    if (tocItem) {
+      openSupportKapitel(tocItem.dataset.kapitel);
+      return;
+    }
+    const resultItem = e.target.closest(".supportResultItem");
+    if (resultItem) {
+      openSupportAbschnitt(resultItem.dataset.anker);
+    }
+  });
 }
 
 export function showStundenkontoView({

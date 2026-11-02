@@ -596,13 +596,21 @@ export function buildFastiNotices(data) {
 // Sprachmodell.
 // ============================================================
 const INTENT_KEYWORDS = [
-  { intent: "assessment", words: ["assessment", "befund", "testung"] },
+  // "bbs"/"sturzrisiko"/"gleichgewicht" ergänzt beim FaSti-Stichwort-Abgleich
+  // mit support-suchbegriffe-physio.json (Abschnitt 9.1) - bewusst NICHT das
+  // dort ebenfalls gelistete "test" oder "berg" übernommen, da beides zu
+  // allgemein ist und in völlig anderem Zusammenhang auftauchen kann.
+  { intent: "assessment", words: ["assessment", "befund", "testung", "bbs", "sturzrisiko", "gleichgewicht"] },
   { intent: "rezept", words: ["rezept", "verordnung", "behandlung"] },
   { intent: "stunden", words: ["stunden", "saldo", "konto", "gearbeitet"] },
   { intent: "urlaub", words: ["urlaub", "resturlaub"] },
   { intent: "krank", words: ["krank", "krankheitstage"] },
   { intent: "zuzahlung", words: ["zuzahlung", "befreit", "befreiung"] },
-  { intent: "frist", words: ["frist", "ablauf", "läuft ab"] },
+  // "abgelaufen" ergänzt (Abschnitt 4-fristenrechner) - NICHT das dort auch
+  // gelistete "behandlungsbeginn", weil es die Teilzeichenkette "behandlung"
+  // enthält und dadurch vom weiter oben stehenden "rezept"-Intent abgefangen
+  // würde, bevor diese Prüfung hier überhaupt erreicht wird.
+  { intent: "frist", words: ["frist", "ablauf", "läuft ab", "abgelaufen"] },
   { intent: "nachbestellung", words: ["nachbestell", "bestell", "fax"] },
   { intent: "kilometer", words: ["kilometer", "km"] }
 ];
@@ -1024,7 +1032,9 @@ const FASTI_HELP_TEXT = "Das habe ich nicht verstanden. Ich kann helfen bei: Ass
 const FASTI_COMMANDS = {
   doku_schreiben: {
     kind: "mutation",
-    triggerWords: ["schreibe doku", "schreib doku", "dokumentiere", "trag doku ein", "trage doku ein", "doku eintragen", "in die doku", "notiere in der doku"]
+    // "doku schreiben" und "behandlung eintragen" beim FaSti-Stichwort-
+    // Abgleich ergänzt (support-suchbegriffe-physio.json, Abschnitt 5).
+    triggerWords: ["schreibe doku", "schreib doku", "dokumentiere", "trag doku ein", "trage doku ein", "doku eintragen", "in die doku", "notiere in der doku", "doku schreiben", "behandlung eintragen"]
   },
   zeit_eintragen: {
     kind: "mutation",
@@ -1066,7 +1076,14 @@ const FASTI_COMMANDS = {
   nachbestellungsuebersicht_oeffnen: {
     kind: "navigation",
     needsPatient: false,
-    triggerWords: ["zeig nachbestellung", "öffne nachbestellung", "nachbestellungsübersicht", "nachbestellung anzeigen", "zeig die nachbestellliste"]
+    // "folgerezept"/"folgeverordnung" beim FaSti-Stichwort-Abgleich ergänzt
+    // (support-suchbegriffe-physio.json, Abschnitt 11) - bewusst hier und
+    // nicht im "nachbestellung"-Intent unten platziert: beide Wörter
+    // enthalten die Teilzeichenkette "rezept" bzw. "verordnung" und würden
+    // dort vom weiter vorne stehenden "rezept"-Intent abgefangen, bevor die
+    // Nachbestellungs-Prüfung überhaupt erreicht wird. Als Befehl (wird vor
+    // den Intents geprüft) funktioniert die Zuordnung dagegen zuverlässig.
+    triggerWords: ["zeig nachbestellung", "öffne nachbestellung", "nachbestellungsübersicht", "nachbestellung anzeigen", "zeig die nachbestellliste", "folgerezept", "folgeverordnung"]
   },
   kilometer_oeffnen: {
     kind: "navigation",
@@ -1086,7 +1103,8 @@ const FASTI_COMMANDS = {
   doku_liste_oeffnen: {
     kind: "navigation",
     needsPatient: false,
-    triggerWords: ["zeig doku", "öffne doku", "doku anzeigen", "zeig die doku", "dokuliste", "doku-liste"]
+    // "schnelldoku" beim FaSti-Stichwort-Abgleich ergänzt (Abschnitt 5).
+    triggerWords: ["zeig doku", "öffne doku", "doku anzeigen", "zeig die doku", "dokuliste", "doku-liste", "schnelldoku"]
   },
   abwesenheit_eintragen: {
     kind: "mutation",
@@ -1099,7 +1117,11 @@ const FASTI_COMMANDS = {
   freikuvert_bestellen: {
     kind: "mutation",
     needsPatient: false,
-    triggerWords: ["freikuvert bestellen", "freikuvert für", "bestelle freikuvert", "freiumschlag bestellen"]
+    // "kuvert" beim FaSti-Stichwort-Abgleich ergänzt (Abschnitt 16, siehe
+    // Beispiel im Auftrag: "Kuvert" gehört zum Freikuvert) - als Mutation
+    // fragt FaSti vor dem eigentlichen Bestellen ohnehin erst nach, ein
+    // versehentlicher Treffer ist also folgenlos abbrechbar.
+    triggerWords: ["freikuvert bestellen", "freikuvert für", "bestelle freikuvert", "freiumschlag bestellen", "kuvert"]
   },
   // Neuen Patienten/eine neue Einrichtung komplett per Freitext anzulegen
   // wäre wegen der vielen Pflicht-/Prüffelder (Arzt, ICD-10,

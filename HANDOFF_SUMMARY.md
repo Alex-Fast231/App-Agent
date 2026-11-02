@@ -1,10 +1,74 @@
 # FaSt App – Handoff Summary
-**Stand:** 2026-10-21 (Session-Ende: Zeiterfassung/SchnellDoku ohne Rezept-Angaben, ausgeschiedene/verstorbene Patienten in eigenem Bereich)
+**Stand:** 2026-10-22 (Session-Ende: Abgabeliste-Markierung geprüft - nur Befreit, kein Doppeltermin-Blau mehr im aktuellen Code)
 **Branch:** `claude/fast-app-8-features-xep6yr` (in `/workspace/app-test`, lokal, **weiterhin nicht auf GitHub gepusht (403, siehe Abschnitt 3)**)
 
 **WICHTIGER HINWEIS ZU DIESER DATEI:** Diese Session startete in einem komplett frischen Container, dessen Code-Stand exakt dem von GitHub (`origin/main`) entsprach - und dieser GitHub-Stand lag inhaltlich bereits deutlich weiter als die zuletzt dokumentierten Abschnitte 1-14 hier unten (der Code enthielt bereits FaSti, die FaSt-Startdatum-Fristenfilter, "Vom letzten Mal übernehmen" u.v.m.). Vermutlich wurde bei einem oder mehreren der manuellen GitHub-Uploads durch den Nutzer die App aktualisiert, ohne jedes Mal auch eine aktualisierte `HANDOFF_SUMMARY.md` mitzunehmen - die Nummerierung unten (Abschnitte 1-14) ist dadurch NICHT mehr lückenlos zur tatsächlichen Code-Historie. Diese Session beginnt deshalb bewusst mit einem neuen, nicht fortlaufend nummerierten Abschnitt ganz oben, statt an Abschnitt 14 anzuknüpfen. **Für zukünftige Sessions:** Verlasst euch bei der Einschätzung "was gibt es schon" primär auf den tatsächlichen Code, nicht ausschließlich auf diese Datei.
 
 Diese Datei ersetzt die vorherige Version vom 2026-09-02 (elfte Session) vollständig. Die elfte Session bleibt unten in Abschnitt 11 als historische Dokumentation stehen.
+
+---
+
+## Aktuelle Session (02.11.2026): Support-Seite in der App + FaSti-Stichwörter-Abgleich (Physio)
+
+Auftrag mit zwei Dateien: dem bereits in einer vorherigen Session erzeugten Leitfaden-PDF (hier als
+`FaSt-App-Leitfaden_1.pdf` neu re-templated zurückgeschickt, textlich identisch - per Seite-für-Seite-
+Sichtprüfung gegen das eigene `leitfaden.md` bestätigt) und einer neuen `support-suchbegriffe-physio.json`
+mit 47 Abschnitts-Einträgen (Anker/Titel/Stichwörter).
+
+**1. Support-Seite ersetzt die externe Wix-Seite.** Neue Datei `data/hilfe-inhalt.js`: der komplette
+Leitfaden-Text (20 Kapitel, 47 Abschnitte inkl. aller 6 nicht-nummerierten Sonder-Anker wie
+`4-fristenrechner` oder `18-pin`), wortgleich aus dem Leitfaden übernommen, blockbasiert (`text`,
+`ueberschrift`, `liste`, `schritte`, `tabelle` statt freiem HTML im Text) mit Kommentar oben zum
+Bearbeiten/Ergänzen. `ui/views.js` bekam eine neue `showSupportView()` mit Kopf+Zurück-Button, Live-Suche
+(beim Tippen, umlaut-/großschreibungs-unabhängig über eine eigene `normalizeSupportSearchText()`), einem
+Inhaltsverzeichnis mit allen 20 Kapiteln (Tipp öffnet+scrollt), aufklappbaren, standardmäßig zugeklappten
+Kapiteln und farbiger Treffer-Markierung im Text. Der `openSupportBtn`-Klick-Handler ruft jetzt
+`showSupportView()` statt `window.open("https://physiofast.wixsite.com/...")` - der Wix-Link ist komplett
+entfernt (per Grep bestätigt). Die FAQ-Seite (`showFaqView`, Fristenrechner) bleibt unverändert und
+getrennt, FaSti ist auf der Support-Seite nirgends eingebunden. **Kapitel 20 ("Support") wurde bewusst
+NICHT inhaltlich angepasst** (beschreibt weiterhin die alte externe Seite) - der Nutzer wollte diesen
+Text selbst anpassen.
+
+**2. FaSti-Stichwörter konservativ abgeglichen** (`modules/fasti.js`): pro Ergänzung einzeln geprüft, ob
+sie zu einem BESTEHENDEN Thema passt und nicht von einem allgemeineren, vorher geprüften Stichwort
+"verschattet" wird (z.B. wurde "behandlungsbeginn" bewusst NICHT zu "frist" ergänzt, weil es die
+Teilzeichenkette "behandlung" enthält und dadurch nie über den weiter vorne stehenden "rezept"-Intent
+hinauskäme - "folgerezept"/"folgeverordnung" wurden deshalb nicht als Intent-Stichwort, sondern direkt als
+Trigger-Phrase am Befehl `nachbestellungsuebersicht_oeffnen` ergänzt, der schon vor den Intents geprüft
+wird). Ergänzt: `bbs`/`sturzrisiko`/`gleichgewicht` (Assessment-Intent), `abgelaufen` (Fristen-Intent),
+`folgerezept`/`folgeverordnung` (Nachbestellungs-Befehl), `doku schreiben`/`behandlung eintragen`
+(Doku-schreiben-Befehl), `schnelldoku` (Doku-Liste-Befehl), `kuvert` (Freikuvert-Befehl). Bewusst NICHT
+übernommen: generische Wörter wie "test", "fahrt", "abgeben", "vo anlegen" sowie alles rein
+rezept-feldbezogene (ICD, Heilmittel, Hausbesuch ...), da dafür ohnehin kein FaSti-Befehl existiert und
+der Auftrag ausdrücklich keine neuen Fähigkeiten vorsah. Mit Playwright `answerFastiChat()` direkt
+getestet: alle drei im Auftrag genannten Bestands-Befehle ("Trage 40 Minuten ...", "Nachbestellung für
+Dr. ...", "Ich bin vom 1.10. bis 5.10. im Urlaub") sowie alle neuen Stichwörter funktionieren wie
+erwartet, keine Regression.
+
+**3. `fasti-befehle.md` neu angelegt** - alle Befehle nach dem Abgleich, nach Thema gruppiert (Doku, Zeit,
+Stunden, Rezept, Assessment, Zuzahlung, Nachbestellung, Fristen, Urlaub/Krank, Kilometer, Freikuvert,
+Navigation, Patienten/Einrichtungen verwalten), je mit Beispielsatz, Stichwörtern und Auskunft/Änderung-
+Kennzeichnung (Änderungen fragen immer erst nach Bestätigung) - Grundlage für den gedruckten
+FaSti-Spickzettel.
+
+**Getestet:** `node --check` auf beiden geänderten/neuen JS-Dateien; alle 7 geforderten Suchbegriffe aus
+dem Abnahmetest (Fristenchecker→`4-fristenrechner`, frist→`4-fristenrechner`, Kuvert→16, Folgerezept→11,
+Daten weg→19.1, PIN→`18-pin`, ueberstunden ohne Umlaut→8.2/8.5) per Playwright direkt gegen die echte
+`showSupportView()`-Logik im Browser verifiziert (nicht nur gegen eine Nachbau-Logik); dabei auch TOC-
+Klick (öffnet+scrollt zum richtigen Kapitel), Treffer-Markierung im Text, leeres Suchfeld→TOC, die exakte
+"Nichts gefunden..."-Meldung und das vollständige Fehlen von "wixsite" im DOM bestätigt.
+
+---
+
+## Aktuelle Session (22.10.2026): Abgabeliste-Markierung geprüft (nur Befreit, keine Doppeltermin-Hervorhebung mehr)
+
+Nutzermeldung: bei einem Ausdruck von vor zwei Wochen war eine blaue Markierung bei Doppelstunden zu sehen - laut Vorgabe soll die EINZIGE farbige Umrandung bei "Befreit" sein.
+
+**Ergebnis der Prüfung: der aktuelle Code ist bereits korrekt.** `renderAbgabeSheetHtml()` (`ui/views.js`) setzt die orangene Umrandung (`border:2px solid #c2410c`) ausschließlich anhand von `row.befreit` - für Doppeltermin-Rezepte (`row.dt`) gibt es im Code gar keinen eigenen Hervorhebungs-Zweig mehr, nur den schlichten Text "Doppelstunde" ohne jede Umrandung. Empirisch mit Playwright bestätigt: ein frisch erzeugter Testausdruck mit einer befreiten UND einer Doppeltermin-Patientin zeigt die orangene Umrandung nur bei der befreiten Patientin, die Doppeltermin-Zeile hat ein leeres `style`-Attribut. Ein veralteter Code-Kommentar ("Befreit (orange) hat Vorrang vor Doppeltermin (blau)") wurde entsprechend korrigiert, da er fälschlich suggerierte, es gäbe noch einen blauen Zweig.
+
+**Wahrscheinliche Erklärung für den beobachteten Altausdruck:** die blaue Doppeltermin-Hervorhebung wurde bereits in einer früheren Session entfernt (siehe Abschnitt 15 unten, "blaue Doppelstunden-Hervorhebung... wurde entfernt"). Der Ausdruck von vor zwei Wochen stammt vermutlich entweder von einem noch nicht aktualisierten Gerät, ODER wurde über den Abgabeliste-"Verlauf" erneut geöffnet/gedruckt - dort wird für bereits gespeicherte Einträge bewusst ein eingefrorenes `snapshotHtml` verwendet (historische Genauigkeit: ein einmal erstellter/versendeter Beleg soll sich nicht nachträglich ändern), sodass ein VOR der Entfernung erstellter Eintrag beim erneuten Öffnen weiterhin die alte (blaue) Fassung zeigt. Eine frisch NEU erzeugte Abgabeliste zeigt garantiert nur noch Befreit/orange.
+
+**Getestet** (neues Skript `smoketest_abgabeliste_markierung.mjs`, 3/3 grün, keine Page-Errors).
 
 ---
 
