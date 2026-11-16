@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; worker-src 'self' blob:; style-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex, nofollow">
+<title>OCR-Prototyp Muster 13</title>
+<link rel="stylesheet" href="app.css">
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<header class="kopf">
+  <h1>OCR-Prototyp Muster 13</h1>
+  <p class="klein">Testversion. Bilder und Ergebnisse bleiben nur im Arbeitsspeicher und sind nach dem Schließen oder Neuladen weg. Nichts wird gesendet oder gespeichert.</p>
+  <div id="ladeZeile" class="ladezeile">
+    <progress id="ladeBalken" max="1" value="0"></progress>
+    <span id="ladeText">Erkennung wird geladen …</span>
+  </div>
+</header>
+
+<main>
+  <section id="start" class="karte">
+    <h2>Rezept aufnehmen</h2>
+    <div class="knoepfe">
+      <button id="kameraBtn" type="button">📷 Kamera</button>
+      <label class="knopf zweit" for="dateiWahl">🖼 Bild wählen</label>
+      <input id="dateiWahl" class="unsichtbar" type="file" accept="image/*">
+    </div>
+    <p id="startMeldung" class="meldung"></p>
+  </section>
+
+  <section id="kamera" class="karte versteckt">
+    <h2>Kamera</h2>
+    <p class="klein">Rezept flach hinlegen, ganz im Bild, möglichst gerade von oben.</p>
+    <video id="video" class="video" autoplay playsinline muted></video>
+    <div class="knoepfe">
+      <button id="ausloesenBtn" type="button">Auslösen</button>
+      <button id="kameraAbbrechenBtn" type="button" class="zweit">Abbrechen</button>
+    </div>
+  </section>
+
+  <section id="ecken" class="karte versteckt">
+    <h2>Blattecken</h2>
+    <p id="eckenHinweis" class="klein">Die vier Punkte auf die Ecken des Formulars ziehen, falls die Automatik danebenliegt.</p>
+    <div id="eckenFlaeche" class="flaeche">
+      <canvas id="eckenCanvas"></canvas>
+    </div>
+    <div class="knoepfe">
+      <button id="auswertenBtn" type="button">Auswerten</button>
+      <button id="drehenBtn" type="button" class="zweit">↻ Drehen</button>
+      <button id="eckenZurueckBtn" type="button" class="zweit">Verwerfen</button>
+    </div>
+    <p id="eckenMeldung" class="meldung"></p>
+  </section>
+
+  <section id="ergebnis" class="karte versteckt">
+    <h2>Ergebnis</h2>
+    <p id="ergebnisZeiten" class="klein"></p>
+    <div class="regler">
+      <label for="schwelle">Schwelle Ankreuzfelder: <span id="schwelleWert"></span></label>
+      <input id="schwelle" type="range" min="0.02" max="0.4" step="0.01" value="0.1">
+    </div>
+    <div id="felderListe" class="felder"></div>
+    <div class="knoepfe">
+      <button id="naechstesBtn" type="button">Nächstes Rezept</button>
+      <button id="kalibrierBtn" type="button" class="zweit">Kalibriermodus</button>
+    </div>
+  </section>
+
+  <section id="kalibrierung" class="karte versteckt">
+    <h2>Kalibriermodus</h2>
+    <p class="klein">Feldrahmen über dem entzerrten Blatt verschieben (ziehen) und in der Größe ändern (Ecke rechts unten). Die Änderung gilt nur in dieser Sitzung. Für den Code das JSON kopieren.</p>
+    <div id="kalibrierFlaeche" class="flaeche">
+      <canvas id="kalibrierCanvas"></canvas>
+    </div>
+    <div class="regler">
+      <label for="feldWahl">Feld wählen</label>
+      <select id="feldWahl"></select>
+    </div>
+    <div class="fein">
+      <button type="button" class="zweit" data-schritt="x,-1">←</button>
+      <button type="button" class="zweit" data-schritt="x,1">→</button>
+      <button type="button" class="zweit" data-schritt="y,-1">↑</button>
+      <button type="button" class="zweit" data-schritt="y,1">↓</button>
+      <button type="button" class="zweit" data-schritt="w,-1">schmaler</button>
+      <button type="button" class="zweit" data-schritt="w,1">breiter</button>
+      <button type="button" class="zweit" data-schritt="h,-1">flacher</button>
+      <button type="button" class="zweit" data-schritt="h,1">höher</button>
+    </div>
+    <p class="klein">Ein Schritt = 0,5 mm.</p>
+    <div class="knoepfe">
+      <button id="neuAuswertenBtn" type="button">Mit diesen Rahmen neu auswerten</button>
+      <button id="jsonBtn" type="button" class="zweit">JSON ausgeben</button>
+      <button id="kalibrierZurueckBtn" type="button" class="zweit">Zurück</button>
+    </div>
+    <textarea id="jsonAusgabe" class="ausgabe versteckt" readonly rows="10"></textarea>
+    <button id="jsonKopierenBtn" type="button" class="zweit versteckt">JSON kopieren</button>
+  </section>
+
+  <section id="auswertung" class="karte">
+    <h2>Auswertung dieser Sitzung</h2>
+    <p class="klein">Nur Zahlen, keine erkannten Werte. Grundlage sind die Knöpfe „stimmt“ / „falsch“.</p>
+    <textarea id="auswertungText" class="ausgabe" readonly rows="12"></textarea>
+    <div class="knoepfe">
+      <button id="kopierenBtn" type="button" class="zweit">Text kopieren</button>
+      <button id="loeschenBtn" type="button" class="gefahr">Alles löschen</button>
+    </div>
+  </section>
+</main>
+</body>
+</html>
